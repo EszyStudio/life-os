@@ -1,0 +1,3151 @@
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import {
+  CheckCircle2,
+  Circle,
+  Play,
+  Pause,
+  RotateCcw,
+  Download,
+  Upload,
+  Cloud,
+  Sun,
+  Moon,
+  History,
+  RefreshCw,
+  Smartphone,
+  Terminal,
+  Copy,
+  Check
+} from 'lucide-react';
+
+// =====================================================
+// 儲存金鑰與預設狀態 (Pure Core Edition + Cloud Sync + HUD)
+// =====================================================
+const STORAGE_KEY = 'LIFE_OS_PURE_CORE_V6';
+const GAS_URL_KEY = 'LIFE_OS_GAS_URL';
+
+// 零 CORS 阻擋的生產級 Google Apps Script 後端程式碼
+const GAS_BACKEND_SCRIPT = `// =====================================================
+// LIFE OS // Google Sheets 雙向雲端資料庫後端 (Zero-CORS)
+// 使用方式：
+// 1. 在 Google Drive 建立一個試算表，命名為「LifeOS_Cloud_Database」
+// 2. 點擊頂部選單「擴充功能」->「Apps Script」，清空預設內容並貼上此程式碼
+// 3. 點擊右上角「部署」->「新增部署」-> 類型選「網頁應用程式 (Web app)」
+// 4. 執行身分選「我 (Me)」，誰可以存取選「任何人 (Anyone)」
+// 5. 複製產生的 Web App URL 貼回 LIFE OS 的「☁️ 雲端同步」設定中！
+// =====================================================
+
+function doGet(e) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('LifeOS_State') || ss.insertSheet('LifeOS_State');
+  var rawJson = sheet.getRange('A2').getValue();
+  var updatedAt = sheet.getRange('B2').getValue();
+  
+  var payload = {
+    status: 'ok',
+    updatedAt: updatedAt || null,
+    data: rawJson ? JSON.parse(rawJson) : null
+  };
+  
+  return ContentService.createTextOutput(JSON.stringify(payload))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('LifeOS_State') || ss.insertSheet('LifeOS_State');
+    var body = JSON.parse(e.postData.contents);
+    var nowStr = new Date().toISOString();
+    
+    sheet.getRange('A1:E1').setValues([['RAW_STATE_JSON', 'LAST_UPDATED_ISO', 'NET_WORTH', 'TOTAL_DEBT', 'SAVINGS']]);
+    sheet.getRange('A2:E2').setValues([[
+      JSON.stringify(body.data),
+      nowStr,
+      body.summary ? body.summary.netWorth : '',
+      body.summary ? body.summary.debt : '',
+      body.summary ? body.summary.savings : ''
+    ]]);
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      status: 'ok',
+      updatedAt: nowStr
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: 'error',
+      message: err.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}`;
+
+const DEFAULT_STATE = {
+  mindset: {
+    principles: [
+      '1. 嚴守紀律，絕不因情緒或衝動做財務決策',
+      '2. 發薪先儲蓄與還債，最後才安排消費',
+      '3. 專注當下時間塊，一次只推進一件核心要務'
+    ],
+    focusSessionsToday: 2,
+    activeTimeblockId: 'tb-1',
+    timeblocks: [
+      { id: 'tb-1', time: '09:00 - 12:00', title: '深度推進 (Deep Work 核心產出)', tag: 'DEEP WORK' },
+      { id: 'tb-2', time: '14:00 - 17:30', title: '核心執行與要務處理 (Core Execution)', tag: 'EXECUTION' },
+      { id: 'tb-3', time: '18:00 - 20:00', title: '籃球實戰 / 健身重訓 (體態推進)', tag: 'ATHLETE' },
+      { id: 'tb-4', time: '21:00 - 22:30', title: '財務檢視、技能沉澱與晚間複盤', tag: 'REVIEW' }
+    ],
+    dailyReview: {
+      energyLevel: 4,
+      amWinCondition: '完成本週高息卡數還款確認，並推進 2 局 50 分鐘深度專注',
+      amTrapToAvoid: '避免無意識滑手機與衝動網購',
+      pmKeyAchievement: '',
+      pmZeroImpulseCheck: true,
+      pmTomorrowTweak: ''
+    },
+    reviewHistory: [
+      {
+        id: 'rev-init-1',
+        date: '10/19',
+        energy: 4,
+        winCondition: '退訂 Click Click 並完成四象限任務遷移、重訓 60 分鐘',
+        achievement: '成功砍除不必要訂閱，完成胸背重訓，飲水達標 2800ml',
+        zeroImpulse: true
+      }
+    ]
+  },
+  todo: {
+    categories: ['#財務清債', '#運動健康', '#深度學習', '#日常要務'],
+    activeCategoryFilter: 'ALL',
+    tasks: [
+      { id: 't-1', text: '檢視本月結單，優先清還高息卡數 $2,000', quad: 'IE', cat: '#財務清債', done: false },
+      { id: 't-2', text: '取消 Click Click (TickTick) 續訂，待辦全面遷移至本四象限系統', quad: 'IE', cat: '#財務清債', done: true },
+      { id: 't-3', text: '完成本週 2 場籃球實戰 + 3 次健身重訓（維持 80kg 減脂節奏）', quad: 'INE', cat: '#運動健康', done: false },
+      { id: 't-4', text: '每月底固定結算四本帳（Savings / Currents / Debt / Investment）', quad: 'INE', cat: '#財務清債', done: false },
+      { id: 't-5', text: '每日 1 小時深度技能沉澱與結構筆記', quad: 'INE', cat: '#深度學習', done: false },
+      { id: 't-6', text: '繳交本月電話費與日常固定帳單', quad: 'NIE', cat: '#日常要務', done: false },
+      { id: 't-7', text: '非必要的球鞋與裝備購物慾（放入 30 天冷靜期）', quad: 'NINE', cat: '#財務清債', done: false }
+    ]
+  },
+  health: {
+    heightCm: 179.5,
+    weightKg: 80.0,
+    bodyFatPct: 16.5,
+    sleepHours: 7.4,
+    waterMl: 1750,
+    weeklySchedule: [
+      { day: '週一', type: 'GYM' },
+      { day: '週二', type: 'BASKETBALL' },
+      { day: '週三', type: 'REST' },
+      { day: '週四', type: 'GYM' },
+      { day: '週五', type: 'BASKETBALL' },
+      { day: '週六', type: 'GYM' },
+      { day: '週日', type: 'REST' }
+    ],
+    dailyHabits: [
+      { id: 'h-1', label: '⌚ 戴 Apple Watch 睡覺', done: true },
+      { id: 'h-2', label: '🥩 高蛋白飲食達標 (150g)', done: true },
+      { id: 'h-3', label: '🛡️ 今日零衝動消費', done: true }
+    ]
+  },
+  finance: {
+    monthlyIncome: 18500,
+    monthlyExpenseBudget: 7500,
+    accounts: [
+      { id: 'acc-1', category: 'DEBT', name: '投資失利分期 / 信貸 A', balance: 42000, initialDebt: 60000, apr: 14.5 },
+      { id: 'acc-2', category: 'DEBT', name: '信用卡結欠 B', balance: 8500, initialDebt: 15000, apr: 24.0 },
+      { id: 'acc-3', category: 'SAVINGS', name: '緊急保命儲蓄池 (Savings)', balance: 11500, initialDebt: 0, apr: 0 },
+      { id: 'acc-4', category: 'CURRENTS', name: '主要出糧活存戶口 (Currents)', balance: 6800, initialDebt: 0, apr: 0 },
+      { id: 'acc-5', category: 'INVESTMENT', name: '長期配置觀察倉 (Investment)', balance: 3200, initialDebt: 0, apr: 0 }
+    ],
+    subscriptions: [
+      { id: 'sub-1', name: 'Click Click (TickTick 滴答清單)', cost: 28, billingDay: '每月 12 號', active: false },
+      { id: 'sub-2', name: 'YouTube Premium / 音樂串流', cost: 78, billingDay: '每月 5 號', active: true },
+      { id: 'sub-3', name: 'AI 生產力工具訂閱', cost: 156, billingDay: '每月 18 號', active: true },
+      { id: 'sub-4', name: '健身房會籍 (Gym)', cost: 350, billingDay: '每月 1 號', active: true },
+      { id: 'sub-5', name: '少看的娛樂串流平台', cost: 95, billingDay: '每月 22 號', active: false }
+    ],
+    transactions: [
+      { id: 'tx-1', date: '10/19', type: 'DEBT_PAY', title: '每月固定償還信貸本息', amount: 3500, accountName: '投資失利分期 / 信貸 A' },
+      { id: 'tx-2', date: '10/18', type: 'SAVING_ADD', title: '發薪日強制先儲蓄', amount: 1500, accountName: '緊急保命儲蓄池 (Savings)' },
+      { id: 'tx-3', date: '10/18', type: 'EXPENSE', title: '運動後高蛋白採買與晚餐', amount: 145, accountName: '主要出糧活存戶口 (Currents)' }
+    ]
+  },
+  cloudConfig: {
+    googleScriptUrl: '',
+    autoSync: true,
+    lastSyncedAt: ''
+  }
+};
+
+const formatCurrency = (num) => {
+  const n = Number(num) || 0;
+  const sign = n < 0 ? '-' : '';
+  return `${sign}$${Math.abs(Math.round(n)).toLocaleString('en-US')}`;
+};
+
+export default function App() {
+  const [appState, setAppState] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      const savedGasUrl = localStorage.getItem(GAS_URL_KEY) || '';
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          ...DEFAULT_STATE,
+          ...parsed,
+          mindset: {
+            ...DEFAULT_STATE.mindset,
+            ...(parsed.mindset || {}),
+            dailyReview: {
+              ...DEFAULT_STATE.mindset.dailyReview,
+              ...(parsed.mindset?.dailyReview || {})
+            }
+          },
+          todo: { ...DEFAULT_STATE.todo, ...(parsed.todo || {}) },
+          health: { ...DEFAULT_STATE.health, ...(parsed.health || {}) },
+          finance: { ...DEFAULT_STATE.finance, ...(parsed.finance || {}) },
+          cloudConfig: {
+            ...DEFAULT_STATE.cloudConfig,
+            ...(parsed.cloudConfig || {}),
+            googleScriptUrl: savedGasUrl || parsed.cloudConfig?.googleScriptUrl || ''
+          }
+        };
+      }
+    } catch (e) {
+      console.error('Failed to load state:', e);
+    }
+    return DEFAULT_STATE;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
+      if (appState.cloudConfig?.googleScriptUrl !== undefined) {
+        localStorage.setItem(GAS_URL_KEY, appState.cloudConfig.googleScriptUrl);
+      }
+    } catch (e) {
+      console.error('Failed to save state:', e);
+    }
+  }, [appState]);
+
+  const [activeTab, setActiveTab] = useState('command');
+  const [toastMsg, setToastMsg] = useState(null);
+  const triggerToast = (msg) => {
+    setToastMsg(msg);
+    setTimeout(() => {
+      setToastMsg((prev) => (prev === msg ? null : prev));
+    }, 3200);
+  };
+
+  const fileInputRef = useRef(null);
+
+  // Timer & Mindset State
+  const [timerMode, setTimerMode] = useState({ label: '25m 專注', minutes: 25 });
+  const [secondsLeft, setSecondsLeft] = useState(25 * 60);
+  const [timerRunning, setTimerRunning] = useState(false);
+  const [reviewSubTab, setReviewSubTab] = useState('AM');
+  const [editingPrinciples, setEditingPrinciples] = useState(false);
+  const [editingTimeblockId, setEditingTimeblockId] = useState(null);
+
+  useEffect(() => {
+    if (!timerRunning) return;
+    const interval = setInterval(() => {
+      setSecondsLeft((prev) => {
+        if (prev <= 1) {
+          setTimerRunning(false);
+          setAppState((s) => ({
+            ...s,
+            mindset: {
+              ...s.mindset,
+              focusSessionsToday: (Number(s.mindset.focusSessionsToday) || 0) + 1
+            }
+          }));
+          triggerToast('🎉 完成一局深度專注！已自動計入今日專注局數');
+          return timerMode.minutes * 60;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [timerRunning, timerMode.minutes]);
+
+  const switchTimerMode = (label, minutes) => {
+    setTimerRunning(false);
+    setTimerMode({ label, minutes });
+    setSecondsLeft(minutes * 60);
+  };
+
+  const formatTimerDisplay = (totalSec) => {
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  const updateDailyReviewField = (field, value) => {
+    setAppState((prev) => ({
+      ...prev,
+      mindset: {
+        ...prev.mindset,
+        dailyReview: {
+          ...prev.mindset.dailyReview,
+          [field]: value
+        }
+      }
+    }));
+  };
+
+  const handleArchiveDailyReview = () => {
+    const rev = appState.mindset.dailyReview;
+    const now = new Date();
+    const dateStr = `${now.getMonth() + 1}/${now.getDate()}`;
+    const newEntry = {
+      id: `rev-${Date.now()}`,
+      date: dateStr,
+      energy: rev.energyLevel,
+      winCondition: rev.amWinCondition || '未填寫晨間目標',
+      achievement: rev.pmKeyAchievement || '完成日常推進',
+      zeroImpulse: rev.pmZeroImpulseCheck
+    };
+
+    setAppState((prev) => ({
+      ...prev,
+      mindset: {
+        ...prev.mindset,
+        reviewHistory: [newEntry, ...(prev.mindset.reviewHistory || [])],
+        dailyReview: {
+          ...prev.mindset.dailyReview,
+          pmKeyAchievement: '',
+          pmTomorrowTweak: ''
+        }
+      }
+    }));
+    setReviewSubTab('HISTORY');
+    triggerToast('✓ 今日心智複盤已閉環並歸檔！');
+  };
+
+  // To-Do State
+  const [quickTaskText, setQuickTaskText] = useState('');
+  const [quickTaskQuad, setQuickTaskQuad] = useState('IE');
+  const [quickTaskCat, setQuickTaskCat] = useState('#財務清債');
+  const [showAddCatInput, setShowAddCatInput] = useState(false);
+  const [newCatName, setNewCatName] = useState('');
+
+  // Health Modal State
+  const [showHealthModal, setShowHealthModal] = useState(false);
+  const [weightInput, setWeightInput] = useState(appState.health.weightKg);
+  const [bfInput, setBfInput] = useState(appState.health.bodyFatPct);
+  const [sleepInput, setSleepInput] = useState(appState.health.sleepHours);
+
+  // Finance State
+  const [showAddAccModal, setShowAddAccModal] = useState(false);
+  const [accCatInput, setAccCatInput] = useState('DEBT');
+  const [accNameInput, setAccNameInput] = useState('');
+  const [accBalanceInput, setAccBalanceInput] = useState('');
+  const [accInitDebtInput, setAccInitDebtInput] = useState('');
+  const [accAprInput, setAccAprInput] = useState('');
+
+  const [adjustingAccId, setAdjustingAccId] = useState(null);
+  const [customDeltaInput, setCustomDeltaInput] = useState('');
+
+  const [cmdTxType, setCmdTxType] = useState('EXPENSE');
+  const [cmdTxTitle, setCmdTxTitle] = useState('');
+  const [cmdTxAmount, setCmdTxAmount] = useState('');
+
+  const [txType, setTxType] = useState('EXPENSE');
+  const [txTitle, setTxTitle] = useState('');
+  const [txAmount, setTxAmount] = useState('');
+  const [txLinkedAcc, setTxLinkedAcc] = useState('AUTO');
+
+  const [subName, setSubName] = useState('');
+  const [subCost, setSubCost] = useState('');
+  const [subDay, setSubDay] = useState('');
+
+  // Cloud Sync State
+  const [showCloudModal, setShowCloudModal] = useState(false);
+  const [cloudModalTab, setCloudModalTab] = useState('sync');
+  const [cloudUrlInput, setCloudUrlInput] = useState(
+    () => localStorage.getItem(GAS_URL_KEY) || appState.cloudConfig?.googleScriptUrl || ''
+  );
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState(() =>
+    localStorage.getItem(GAS_URL_KEY) || appState.cloudConfig?.googleScriptUrl ? 'connected' : 'local'
+  );
+  const [copiedGasCode, setCopiedGasCode] = useState(false);
+  const isPullingRef = useRef(false);
+  const autoSyncTimerRef = useRef(null);
+
+  // Date and Birthday Countdown
+  const dateInfo = useMemo(() => {
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('zh-HK', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      weekday: 'long'
+    });
+    let targetYear = now.getFullYear();
+    let bday = new Date(targetYear, 11, 5); // Dec 5
+    if (now > bday) {
+      bday = new Date(targetYear + 1, 11, 5);
+    }
+    const daysToBday = Math.ceil((bday - now) / (1000 * 60 * 60 * 24));
+    return { dateStr, daysToBday };
+  }, []);
+
+  // JSON Backup / Restore
+  const handleExportJsonBackup = () => {
+    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(appState, null, 2));
+    const dlAnchor = document.createElement('a');
+    dlAnchor.setAttribute('href', dataStr);
+    dlAnchor.setAttribute('download', `LIFE_OS_BACKUP_${new Date().toISOString().slice(0, 10)}.json`);
+    document.body.appendChild(dlAnchor);
+    dlAnchor.click();
+    dlAnchor.remove();
+    triggerToast('✓ 已成功下載完整 JSON 備份檔');
+  };
+
+  const handleImportJsonBackup = (e) => {
+    const fileReader = new FileReader();
+    if (e.target.files && e.target.files[0]) {
+      fileReader.readAsText(e.target.files[0], 'UTF-8');
+      fileReader.onload = (event) => {
+        try {
+          const parsed = JSON.parse(event.target.result);
+          setAppState(parsed);
+          triggerToast('✓ 已成功從備份檔還原所有系統資料');
+        } catch (err) {
+          triggerToast('⚠️ 匯入失敗：檔案格式不正確');
+        }
+      };
+    }
+  };
+
+  // Google Sheets Cloud Sync Methods
+  const pushToGoogleSheets = async (customUrl, silent = false) => {
+    const url = (customUrl ?? cloudUrlInput ?? appState.cloudConfig?.googleScriptUrl ?? '').trim();
+    if (!url) {
+      if (!silent) triggerToast('請先填入你的 Google Apps Script Web App 網址');
+      return;
+    }
+    setIsSyncingCloud(true);
+    setCloudStatus('syncing');
+    try {
+      const accs = appState.finance.accounts || [];
+      let sav = 0, cur = 0, dbt = 0, inv = 0;
+      accs.forEach((a) => {
+        const v = Number(a.balance) || 0;
+        if (a.category === 'SAVINGS') sav += v;
+        if (a.category === 'CURRENTS') cur += v;
+        if (a.category === 'DEBT') dbt += v;
+        if (a.category === 'INVESTMENT') inv += v;
+      });
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          sheetName: 'LifeOS_State',
+          summary: {
+            netWorth: sav + cur + inv - dbt,
+            debt: dbt,
+            savings: sav
+          },
+          data: {
+            mindset: appState.mindset,
+            todo: appState.todo,
+            health: appState.health,
+            finance: appState.finance
+          }
+        })
+      });
+      const json = await res.json();
+      if (json && json.status === 'ok') {
+        const nowStr = new Date().toLocaleTimeString('zh-HK', { hour: '2-digit', minute: '2-digit' });
+        isPullingRef.current = true;
+        setAppState((prev) => ({
+          ...prev,
+          cloudConfig: {
+            ...prev.cloudConfig,
+            googleScriptUrl: url,
+            lastSyncedAt: nowStr
+          }
+        }));
+        setCloudStatus('connected');
+        if (!silent) triggerToast('🟢 已成功雙向同步推送至 Google Sheets 雲端！');
+      } else {
+        setCloudStatus('error');
+        if (!silent) triggerToast('⚠️ 雲端回應異常，請確認 Apps Script 程式碼');
+      }
+    } catch (err) {
+      setCloudStatus('error');
+      if (!silent) triggerToast('⚠️ 推送受阻，請確認 Apps Script 部署權限設為「任何人 (Anyone)」');
+    }
+    setIsSyncingCloud(false);
+  };
+
+  const pullFromGoogleSheets = async (customUrl, silent = false) => {
+    const url = (customUrl ?? cloudUrlInput ?? appState.cloudConfig?.googleScriptUrl ?? '').trim();
+    if (!url) {
+      if (!silent) triggerToast('請先填入你的 Google Apps Script Web App 網址');
+      return;
+    }
+    setIsSyncingCloud(true);
+    setCloudStatus('syncing');
+    try {
+      const res = await fetch(`${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}`);
+      const json = await res.json();
+      if (json && json.status === 'ok') {
+        const nowStr = new Date().toLocaleTimeString('zh-HK', { hour: '2-digit', minute: '2-digit' });
+        if (json.data && typeof json.data === 'object') {
+          isPullingRef.current = true;
+          setAppState((prev) => ({
+            ...prev,
+            ...json.data,
+            cloudConfig: {
+              ...prev.cloudConfig,
+              googleScriptUrl: url,
+              lastSyncedAt: nowStr
+            }
+          }));
+          setCloudStatus('connected');
+          if (!silent) triggerToast('🟢 已從 Google Sheets 載入最新跨裝置數據！');
+        } else {
+          setCloudStatus('connected');
+          if (!silent) triggerToast('🟢 連線成功！雲端目前為空，正在為你初始化推送...');
+          await pushToGoogleSheets(url, true);
+        }
+      } else {
+        setCloudStatus('error');
+        if (!silent) triggerToast('⚠️ 雲端格式不符，請檢查 Apps Script');
+      }
+    } catch (err) {
+      setCloudStatus('error');
+      if (!silent) triggerToast('⚠️ 無法連線雲端，請確認網址正確');
+    }
+    setIsSyncingCloud(false);
+  };
+
+  useEffect(() => {
+    const savedUrl = localStorage.getItem(GAS_URL_KEY) || appState.cloudConfig?.googleScriptUrl;
+    if (savedUrl && savedUrl.startsWith('https://script.google.com')) {
+      pullFromGoogleSheets(savedUrl, true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isPullingRef.current) {
+      isPullingRef.current = false;
+      return;
+    }
+    const url = appState.cloudConfig?.googleScriptUrl;
+    if (!url || !appState.cloudConfig?.autoSync) return;
+
+    if (autoSyncTimerRef.current) clearTimeout(autoSyncTimerRef.current);
+    autoSyncTimerRef.current = setTimeout(() => {
+      pushToGoogleSheets(url, true);
+    }, 2200);
+
+    return () => {
+      if (autoSyncTimerRef.current) clearTimeout(autoSyncTimerRef.current);
+    };
+  }, [appState.mindset, appState.todo, appState.health, appState.finance]);
+
+  const handleCopyGasScript = () => {
+    navigator.clipboard.writeText(GAS_BACKEND_SCRIPT);
+    setCopiedGasCode(true);
+    triggerToast('📋 已複製 Google Apps Script 程式碼！');
+    setTimeout(() => setCopiedGasCode(false), 3000);
+  };
+
+  // Finance Totals & CRUD
+  const finTotals = useMemo(() => {
+    const accs = appState.finance.accounts || [];
+    let savings = 0, currents = 0, debt = 0, initialDebtTotal = 0, investment = 0;
+
+    accs.forEach((a) => {
+      const val = Number(a.balance) || 0;
+      if (a.category === 'SAVINGS') savings += val;
+      if (a.category === 'CURRENTS') currents += val;
+      if (a.category === 'DEBT') {
+        debt += val;
+        initialDebtTotal += Math.max(val, Number(a.initialDebt) || val);
+      }
+      if (a.category === 'INVESTMENT') investment += val;
+    });
+
+    const totalAssets = savings + currents + investment;
+    const netWorth = totalAssets - debt;
+
+    let activeSubMonthly = 0, savedSubMonthly = 0;
+    (appState.finance.subscriptions || []).forEach((s) => {
+      const c = Number(s.cost) || 0;
+      if (s.active) activeSubMonthly += c;
+      else savedSubMonthly += c;
+    });
+
+    let monthExpenseTotal = 0;
+    (appState.finance.transactions || []).forEach((t) => {
+      if (t.type === 'EXPENSE') monthExpenseTotal += Number(t.amount) || 0;
+    });
+
+    const income = Number(appState.finance.monthlyIncome) || 0;
+    const projectedSurplus = income - monthExpenseTotal - activeSubMonthly;
+
+    const debtPaidPct = initialDebtTotal > 0
+      ? Math.min(100, Math.max(0, Math.round(((initialDebtTotal - debt) / initialDebtTotal) * 100)))
+      : 100;
+    const savingsGoalPct = Math.min(100, Math.round((savings / 30000) * 100));
+
+    return {
+      savings,
+      currents,
+      debt,
+      initialDebtTotal,
+      investment,
+      totalAssets,
+      netWorth,
+      activeSubMonthly,
+      savedSubYearly: savedSubMonthly * 12,
+      monthExpenseTotal,
+      projectedSurplus,
+      debtPaidPct,
+      savingsGoalPct
+    };
+  }, [appState.finance]);
+
+  const setAccountBalanceDirect = (accId, val) => {
+    const num = Math.max(0, Number(val) || 0);
+    setAppState((prev) => ({
+      ...prev,
+      finance: {
+        ...prev.finance,
+        accounts: prev.finance.accounts.map((a) => (a.id === accId ? { ...a, balance: num } : a))
+      }
+    }));
+  };
+
+  const adjustAccountBalance = (accId, delta) => {
+    setAppState((prev) => ({
+      ...prev,
+      finance: {
+        ...prev.finance,
+        accounts: prev.finance.accounts.map((a) =>
+          a.id === accId ? { ...a, balance: Math.max(0, (Number(a.balance) || 0) + delta) } : a
+        )
+      }
+    }));
+  };
+
+  const handleApplyCustomDelta = (accId) => {
+    const delta = Number(customDeltaInput);
+    if (!isNaN(delta) && delta !== 0) {
+      adjustAccountBalance(accId, delta);
+      triggerToast(`已更新帳戶餘額 (${delta > 0 ? '+' : ''}${delta})`);
+    }
+    setAdjustingAccId(null);
+    setCustomDeltaInput('');
+  };
+
+  const handleDeleteAccount = (accId) => {
+    setAppState((prev) => ({
+      ...prev,
+      finance: {
+        ...prev.finance,
+        accounts: prev.finance.accounts.filter((a) => a.id !== accId)
+      }
+    }));
+  };
+
+  const handleAddAccount = (e) => {
+    e.preventDefault();
+    if (!accNameInput.trim()) return;
+    const bal = Math.max(0, Number(accBalanceInput) || 0);
+    const initD = accCatInput === 'DEBT' ? Math.max(bal, Number(accInitDebtInput) || bal) : 0;
+    const apr = accCatInput === 'DEBT' ? Number(accAprInput) || 0 : 0;
+
+    setAppState((prev) => ({
+      ...prev,
+      finance: {
+        ...prev.finance,
+        accounts: [
+          ...prev.finance.accounts,
+          {
+            id: `acc-${Date.now()}`,
+            category: accCatInput,
+            name: accNameInput.trim(),
+            balance: bal,
+            initialDebt: initD,
+            apr
+          }
+        ]
+      }
+    }));
+    setAccNameInput('');
+    setAccBalanceInput('');
+    setAccInitDebtInput('');
+    setAccAprInput('');
+    setShowAddAccModal(false);
+    triggerToast('✓ 已新增財務帳戶項目');
+  };
+
+  const recordTransaction = (type, title, amountVal, linkedAccId = 'AUTO') => {
+    const amt = Number(amountVal) || 0;
+    if (!title.trim() || amt <= 0) return;
+
+    const now = new Date();
+    const dateStr = `${now.getMonth() + 1}/${now.getDate()}`;
+
+    setAppState((prev) => {
+      let targetAccName = '';
+      const updatedAccounts = prev.finance.accounts.map((a) => {
+        let isMatch = false;
+        if (linkedAccId === 'AUTO') {
+          const firstMatch = prev.finance.accounts.find((x) => {
+            if (type === 'DEBT_PAY') return x.category === 'DEBT';
+            if (type === 'SAVING_ADD') return x.category === 'SAVINGS';
+            return x.category === 'CURRENTS';
+          });
+          if (firstMatch && firstMatch.id === a.id) isMatch = true;
+        } else if (linkedAccId !== 'NONE' && a.id === linkedAccId) {
+          isMatch = true;
+        }
+
+        if (isMatch) {
+          targetAccName = a.name;
+          if (type === 'EXPENSE' || type === 'DEBT_PAY') {
+            return { ...a, balance: Math.max(0, (Number(a.balance) || 0) - amt) };
+          } else {
+            return { ...a, balance: (Number(a.balance) || 0) + amt };
+          }
+        }
+        return a;
+      });
+
+      const newTx = {
+        id: `tx-${Date.now()}`,
+        date: dateStr,
+        type,
+        title: title.trim(),
+        amount: amt,
+        accountName: targetAccName
+      };
+
+      return {
+        ...prev,
+        finance: {
+          ...prev.finance,
+          accounts: updatedAccounts,
+          transactions: [newTx, ...(prev.finance.transactions || [])]
+        }
+      };
+    });
+    triggerToast(`✓ 已記帳：${title.trim()} ($${amt})`);
+  };
+
+  const handleCmdQuickTx = (e) => {
+    e.preventDefault();
+    recordTransaction(cmdTxType, cmdTxTitle, cmdTxAmount, 'AUTO');
+    setCmdTxTitle('');
+    setCmdTxAmount('');
+  };
+
+  const handleFullTxSubmit = (e) => {
+    e.preventDefault();
+    recordTransaction(txType, txTitle, txAmount, txLinkedAcc);
+    setTxTitle('');
+    setTxAmount('');
+  };
+
+  const handleDeleteTx = (txId) => {
+    setAppState((prev) => ({
+      ...prev,
+      finance: {
+        ...prev.finance,
+        transactions: prev.finance.transactions.filter((t) => t.id !== txId)
+      }
+    }));
+  };
+
+  const handleAddSub = (e) => {
+    e.preventDefault();
+    if (!subName.trim()) return;
+    setAppState((prev) => ({
+      ...prev,
+      finance: {
+        ...prev.finance,
+        subscriptions: [
+          ...prev.finance.subscriptions,
+          {
+            id: `sub-${Date.now()}`,
+            name: subName.trim(),
+            cost: Math.max(0, Number(subCost) || 0),
+            billingDay: subDay.trim() || '每月固定',
+            active: true
+          }
+        ]
+      }
+    }));
+    setSubName('');
+    setSubCost('');
+    setSubDay('');
+  };
+
+  const toggleSubActive = (subId) => {
+    setAppState((prev) => ({
+      ...prev,
+      finance: {
+        ...prev.finance,
+        subscriptions: prev.finance.subscriptions.map((s) =>
+          s.id === subId ? { ...s, active: !s.active } : s
+        )
+      }
+    }));
+  };
+
+  const updateSubCostInline = (subId, val) => {
+    setAppState((prev) => ({
+      ...prev,
+      finance: {
+        ...prev.finance,
+        subscriptions: prev.finance.subscriptions.map((s) =>
+          s.id === subId ? { ...s, cost: Math.max(0, Number(val) || 0) } : s
+        )
+      }
+    }));
+  };
+
+  const deleteSubItem = (subId) => {
+    setAppState((prev) => ({
+      ...prev,
+      finance: {
+        ...prev.finance,
+        subscriptions: prev.finance.subscriptions.filter((s) => s.id !== subId)
+      }
+    }));
+  };
+
+  // To-Do Actions
+  const handleAddTask = (e) => {
+    e.preventDefault();
+    if (!quickTaskText.trim()) return;
+    setAppState((prev) => ({
+      ...prev,
+      todo: {
+        ...prev.todo,
+        tasks: [
+          {
+            id: `t-${Date.now()}`,
+            text: quickTaskText.trim(),
+            quad: quickTaskQuad,
+            cat: quickTaskCat,
+            done: false
+          },
+          ...prev.todo.tasks
+        ]
+      }
+    }));
+    setQuickTaskText('');
+  };
+
+  const toggleTaskDone = (taskId) => {
+    setAppState((prev) => ({
+      ...prev,
+      todo: {
+        ...prev.todo,
+        tasks: prev.todo.tasks.map((t) => (t.id === taskId ? { ...t, done: !t.done } : t))
+      }
+    }));
+  };
+
+  const changeTaskQuad = (taskId, newQuad) => {
+    setAppState((prev) => ({
+      ...prev,
+      todo: {
+        ...prev.todo,
+        tasks: prev.todo.tasks.map((t) => (t.id === taskId ? { ...t, quad: newQuad } : t))
+      }
+    }));
+  };
+
+  const deleteTaskItem = (taskId) => {
+    setAppState((prev) => ({
+      ...prev,
+      todo: {
+        ...prev.todo,
+        tasks: prev.todo.tasks.filter((t) => t.id !== taskId)
+      }
+    }));
+  };
+
+  const handleAddCategory = (e) => {
+    e.preventDefault();
+    if (!newCatName.trim()) return;
+    const formatted = newCatName.trim().startsWith('#') ? newCatName.trim() : `#${newCatName.trim()}`;
+    if (!appState.todo.categories.includes(formatted)) {
+      setAppState((prev) => ({
+        ...prev,
+        todo: {
+          ...prev.todo,
+          categories: [...prev.todo.categories, formatted]
+        }
+      }));
+    }
+    setQuickTaskCat(formatted);
+    setNewCatName('');
+    setShowAddCatInput(false);
+  };
+
+  // Health Actions
+  const bmiValue = useMemo(() => {
+    const hM = (appState.health.heightCm || 179.5) / 100;
+    return (appState.health.weightKg / (hM * hM)).toFixed(1);
+  }, [appState.health.heightCm, appState.health.weightKg]);
+
+  const cycleWorkoutDay = (idx) => {
+    const order = ['REST', 'GYM', 'BASKETBALL'];
+    setAppState((prev) => {
+      const nextSched = [...prev.health.weeklySchedule];
+      const curr = nextSched[idx].type;
+      nextSched[idx] = { ...nextSched[idx], type: order[(order.indexOf(curr) + 1) % order.length] };
+      return {
+        ...prev,
+        health: { ...prev.health, weeklySchedule: nextSched }
+      };
+    });
+  };
+
+  const addWaterMl = (delta) => {
+    setAppState((prev) => ({
+      ...prev,
+      health: {
+        ...prev.health,
+        waterMl: Math.max(0, (Number(prev.health.waterMl) || 0) + delta)
+      }
+    }));
+  };
+
+  const toggleHabit = (habitId) => {
+    setAppState((prev) => ({
+      ...prev,
+      health: {
+        ...prev.health,
+        dailyHabits: prev.health.dailyHabits.map((h) =>
+          h.id === habitId ? { ...h, done: !h.done } : h
+        )
+      }
+    }));
+  };
+
+  const handleSaveHealthModal = (e) => {
+    e.preventDefault();
+    setAppState((prev) => ({
+      ...prev,
+      health: {
+        ...prev.health,
+        weightKg: Number(weightInput) || 80.0,
+        bodyFatPct: Number(bfInput) || 16.5,
+        sleepHours: Number(sleepInput) || 7.4
+      }
+    }));
+    setShowHealthModal(false);
+    triggerToast('✓ 已更新身體機能數據');
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-[#e9eef5] via-[#dde4ee] to-[#e4e9f0] text-[#1d1d1f] p-3 sm:p-5 lg:p-7 font-sans select-none">
+      {/* Toast */}
+      {toastMsg && (
+        <div className="fixed bottom-5 right-5 z-50 bg-zinc-900/95 text-white px-4 py-2.5 rounded-2xl shadow-xl border border-white/20 text-xs font-semibold flex items-center gap-2">
+          <span>{toastMsg}</span>
+        </div>
+      )}
+
+      {/* Hidden file input for import */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json"
+        onChange={handleImportJsonBackup}
+        className="hidden"
+      />
+
+      {/* Header Dock */}
+      <header className="max-w-[1600px] mx-auto mb-6 bg-white/75 backdrop-blur-2xl border border-white/90 shadow-[0_10px_30px_-5px_rgba(29,29,31,0.05)] rounded-2xl px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-b from-[#3a3a3c] to-[#1d1d1f] text-white flex items-center justify-center font-bold text-sm tracking-wider shadow-sm">
+            OS
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="font-bold text-base tracking-tight text-zinc-900">LIFE OS</h1>
+              <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-gradient-to-b from-[#f5f5f7] to-[#e5e5ea] border border-black/10 text-zinc-700">
+                HUD Telemetry + Cloud
+              </span>
+            </div>
+            <p className="text-xs text-zinc-500 mt-0.5">{dateInfo.dateStr}</p>
+          </div>
+        </div>
+
+        <nav className="flex items-center gap-1.5 bg-zinc-200/75 p-1.5 rounded-xl border border-white/70 overflow-x-auto">
+          <button
+            onClick={() => setActiveTab('command')}
+            className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+              activeTab === 'command'
+                ? 'bg-white text-zinc-900 shadow-sm'
+                : 'text-zinc-600 hover:text-zinc-900'
+            }`}
+          >
+            <span>⌘</span> 主戰情室 (HUD 四宮格)
+          </button>
+          <button
+            onClick={() => setActiveTab('finance')}
+            className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+              activeTab === 'finance'
+                ? 'bg-white text-zinc-900 shadow-sm'
+                : 'text-zinc-600 hover:text-zinc-900'
+            }`}
+          >
+            <span>💰</span> 財務監控儀表板
+          </button>
+          <button
+            onClick={() => setActiveTab('matrix')}
+            className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+              activeTab === 'matrix'
+                ? 'bg-white text-zinc-900 shadow-sm'
+                : 'text-zinc-600 hover:text-zinc-900'
+            }`}
+          >
+            <span>⊞</span> 四象限 To-Do
+          </button>
+        </nav>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <div
+            onClick={() => setActiveTab('finance')}
+            className="cursor-pointer px-3 py-1.5 rounded-xl bg-white/75 hover:bg-white border border-white shadow-sm flex items-center gap-2 transition"
+            title="點擊進入財務監控儀表板"
+          >
+            <span className="text-[11px] text-zinc-500 font-medium">真實淨值</span>
+            <span
+              className={`text-xs font-bold ${
+                finTotals.netWorth >= 0 ? 'text-emerald-700' : 'text-rose-600'
+              }`}
+            >
+              {formatCurrency(finTotals.netWorth)}
+            </span>
+          </div>
+
+          <div
+            className="px-3 py-1.5 rounded-xl bg-gradient-to-b from-[#f5f5f7] to-[#e5e5ea] border border-black/10 flex items-center gap-1.5"
+            title="12月5日 30歲里程碑倒數"
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            <span className="text-xs font-semibold text-zinc-700">
+              12/5 里程碑：{dateInfo.daysToBday} 天
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 pl-1 border-l border-zinc-300/80">
+            <button
+              onClick={handleExportJsonBackup}
+              className="px-2.5 py-1.5 rounded-xl bg-white/80 hover:bg-white border border-white text-xs font-semibold text-zinc-700 shadow-sm flex items-center gap-1 cursor-pointer"
+              title="下載完整數據備份檔 (.json)"
+            >
+              <Download className="w-3.5 h-3.5" /> 備份
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-2.5 py-1.5 rounded-xl bg-white/80 hover:bg-white border border-white text-xs font-semibold text-zinc-700 shadow-sm flex items-center gap-1 cursor-pointer"
+              title="上傳 .json 備份檔還原所有紀錄"
+            >
+              <Upload className="w-3.5 h-3.5" /> 還原
+            </button>
+            <button
+              onClick={() => {
+                setCloudUrlInput(
+                  localStorage.getItem(GAS_URL_KEY) || appState.cloudConfig?.googleScriptUrl || ''
+                );
+                setShowCloudModal(true);
+              }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold shadow-sm flex items-center gap-1.5 cursor-pointer transition ${
+                cloudStatus === 'connected'
+                  ? 'bg-emerald-900 text-white hover:bg-emerald-800'
+                  : cloudStatus === 'syncing'
+                  ? 'bg-amber-600 text-white'
+                  : cloudStatus === 'error'
+                  ? 'bg-rose-700 text-white'
+                  : 'bg-gradient-to-b from-[#3a3a3c] to-[#1d1d1f] text-white'
+              }`}
+              title="開啟 Google Sheets 雙向雲端同步與 iPhone PWA 指南"
+            >
+              {cloudStatus === 'syncing' ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" /> 🔄 同步中...
+                </>
+              ) : cloudStatus === 'connected' ? (
+                <>
+                  <Cloud className="w-3.5 h-3.5 text-emerald-300" /> 🟢 已連線 Google Cloud
+                </>
+              ) : cloudStatus === 'error' ? (
+                <>
+                  <Cloud className="w-3.5 h-3.5 text-rose-200" /> ⚠️ 雲端需檢查
+                </>
+              ) : (
+                <>
+                  <Cloud className="w-3.5 h-3.5" /> ⚪ 本機模式 (開啟雲端)
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content Views */}
+      <main className="max-w-[1600px] mx-auto">
+        {/* VIEW 1: ⌘ 主戰情室 (HUD 四宮格) */}
+        {activeTab === 'command' && (
+          <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* QUADRANT 1: 每日心智複盤與時間塊調度器 */}
+            <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-6 flex flex-col justify-between h-[550px]">
+              <div>
+                <div className="flex items-center justify-between gap-2 mb-2.5">
+                  <div>
+                    <h2 className="text-base font-bold text-zinc-900">
+                      每日心智複盤與時間塊調度 (Mindset & Timebox)
+                    </h2>
+                    <p className="text-xs text-zinc-500">
+                      結合「方案 C 時間塊番茄鐘」與「方案 A 晨晚閉環複盤」，掌握每日主動權
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setEditingPrinciples(!editingPrinciples)}
+                    className="px-2.5 py-1 rounded-xl bg-white/80 hover:bg-white border border-white text-[11px] font-semibold text-zinc-700 shadow-sm cursor-pointer shrink-0"
+                  >
+                    {editingPrinciples ? '✓ 完成原則編輯' : '✎ 編輯核心鐵律'}
+                  </button>
+                </div>
+
+                {!editingPrinciples ? (
+                  <div className="bg-gradient-to-r from-zinc-900 via-zinc-800 to-zinc-900 text-white px-3.5 py-2 rounded-2xl flex flex-wrap items-center justify-between gap-2 mb-4 shadow-sm">
+                    <div className="flex items-center gap-2 overflow-x-auto">
+                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-white/15 text-amber-300 shrink-0">
+                        核心鐵律
+                      </span>
+                      <div className="flex items-center gap-3 text-xs font-medium text-zinc-100 overflow-x-auto whitespace-nowrap">
+                        {appState.mindset.principles.map((p, idx) => (
+                          <span key={idx} className="inline-block">
+                            {p}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-white/90 p-3 rounded-2xl border border-zinc-200 mb-4 space-y-1.5">
+                    {appState.mindset.principles.map((p, idx) => (
+                      <input
+                        key={idx}
+                        type="text"
+                        value={p}
+                        onChange={(e) => {
+                          const next = [...appState.mindset.principles];
+                          next[idx] = e.target.value;
+                          setAppState((prev) => ({
+                            ...prev,
+                            mindset: { ...prev.mindset, principles: next }
+                          }));
+                        }}
+                        className="w-full bg-zinc-100 px-2.5 py-1 rounded-lg text-xs text-zinc-900 border border-zinc-200 select-text"
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 flex-1 overflow-hidden">
+                {/* Left Timebox & Timer */}
+                <div className="sm:col-span-6 bg-white/65 border border-white rounded-2xl p-3.5 flex flex-col justify-between">
+                  <div className="bg-white/90 rounded-xl p-3 border border-zinc-200/70">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-1">
+                        {[
+                          { label: '25m 專注', min: 25 },
+                          { label: '50m 深度', min: 50 },
+                          { label: '5m 休息', min: 5 }
+                        ].map((m) => (
+                          <button
+                            key={m.label}
+                            onClick={() => switchTimerMode(m.label, m.min)}
+                            className={`px-2 py-0.5 rounded-md text-[10px] font-bold cursor-pointer transition ${
+                              timerMode.label === m.label
+                                ? 'bg-zinc-900 text-white'
+                                : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+                            }`}
+                          >
+                            {m.label}
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        onClick={() =>
+                          setAppState((p) => ({
+                            ...p,
+                            mindset: {
+                              ...p.mindset,
+                              focusSessionsToday: (Number(p.mindset.focusSessionsToday) || 0) + 1
+                            }
+                          }))
+                        }
+                        className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 cursor-pointer"
+                        title="點擊手動 +1 局專注"
+                      >
+                        今日完成：{appState.mindset.focusSessionsToday} 局 (+1)
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between mt-1">
+                      <span className="text-2xl font-bold tracking-tight font-mono text-zinc-900">
+                        {formatTimerDisplay(secondsLeft)}
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => setTimerRunning(!timerRunning)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1 cursor-pointer ${
+                            timerRunning
+                              ? 'bg-amber-500 text-white'
+                              : 'bg-gradient-to-b from-[#3a3a3c] to-[#1d1d1f] text-white'
+                          }`}
+                        >
+                          {timerRunning ? (
+                            <>
+                              <Pause className="w-3.5 h-3.5" /> 暫停
+                            </>
+                          ) : (
+                            <>
+                              <Play className="w-3.5 h-3.5" /> 開始
+                            </>
+                          )}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setTimerRunning(false);
+                            setSecondsLeft(timerMode.minutes * 60);
+                          }}
+                          className="p-1.5 rounded-xl bg-zinc-200 hover:bg-zinc-300 text-zinc-700 cursor-pointer"
+                          title="重置計時器"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-2.5 flex-1 flex flex-col justify-between space-y-1.5 overflow-y-auto">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-zinc-700">
+                        今日四大時間塊 (點擊切換當前時段)
+                      </span>
+                    </div>
+                    {appState.mindset.timeblocks.map((tb) => {
+                      const isActive = appState.mindset.activeTimeblockId === tb.id;
+                      return (
+                        <div
+                          key={tb.id}
+                          onClick={() =>
+                            setAppState((p) => ({
+                              ...p,
+                              mindset: { ...p.mindset, activeTimeblockId: tb.id }
+                            }))
+                          }
+                          className={`px-2.5 py-2 rounded-xl border transition cursor-pointer flex items-center justify-between gap-2 ${
+                            isActive
+                              ? 'bg-zinc-900 text-white border-zinc-900 shadow-sm'
+                              : 'bg-white/80 hover:bg-white text-zinc-800 border-zinc-200/70'
+                          }`}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`text-[10px] font-mono font-bold ${
+                                  isActive ? 'text-emerald-400' : 'text-zinc-500'
+                                }`}
+                              >
+                                {isActive ? '● ' : ''}
+                                {tb.time}
+                              </span>
+                            </div>
+                            {editingTimeblockId === tb.id ? (
+                              <input
+                                type="text"
+                                value={tb.title}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setAppState((p) => ({
+                                    ...p,
+                                    mindset: {
+                                      ...p.mindset,
+                                      timeblocks: p.mindset.timeblocks.map((x) =>
+                                        x.id === tb.id ? { ...x, title: val } : x
+                                      )
+                                    }
+                                  }));
+                                }}
+                                onBlur={() => setEditingTimeblockId(null)}
+                                onKeyDown={(e) => e.key === 'Enter' && setEditingTimeblockId(null)}
+                                autoFocus
+                                className="w-full bg-white text-zinc-900 px-1.5 py-0.5 rounded text-xs mt-0.5 select-text"
+                              />
+                            ) : (
+                              <div className="text-xs font-semibold truncate">{tb.title}</div>
+                            )}
+                          </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingTimeblockId(editingTimeblockId === tb.id ? null : tb.id);
+                            }}
+                            className={`text-[10px] px-1.5 py-0.5 rounded ${
+                              isActive
+                                ? 'bg-white/20 text-white'
+                                : 'bg-zinc-100 text-zinc-500 hover:text-zinc-900'
+                            }`}
+                          >
+                            ✎
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Right AM/PM Review */}
+                <div className="sm:col-span-6 bg-white/65 border border-white rounded-2xl p-3.5 flex flex-col justify-between overflow-hidden">
+                  <div className="flex items-center gap-1 bg-zinc-200/70 p-1 rounded-xl mb-2.5">
+                    <button
+                      onClick={() => setReviewSubTab('AM')}
+                      className={`flex-1 py-1 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer transition ${
+                        reviewSubTab === 'AM'
+                          ? 'bg-white text-zinc-900 shadow-sm'
+                          : 'text-zinc-600 hover:text-zinc-900'
+                      }`}
+                    >
+                      <Sun className="w-3 h-3 text-amber-500" /> AM 晨間校準
+                    </button>
+                    <button
+                      onClick={() => setReviewSubTab('PM')}
+                      className={`flex-1 py-1 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer transition ${
+                        reviewSubTab === 'PM'
+                          ? 'bg-white text-zinc-900 shadow-sm'
+                          : 'text-zinc-600 hover:text-zinc-900'
+                      }`}
+                    >
+                      <Moon className="w-3 h-3 text-indigo-600" /> PM 晚間複盤
+                    </button>
+                    <button
+                      onClick={() => setReviewSubTab('HISTORY')}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer transition ${
+                        reviewSubTab === 'HISTORY'
+                          ? 'bg-white text-zinc-900 shadow-sm'
+                          : 'text-zinc-600 hover:text-zinc-900'
+                      }`}
+                    >
+                      <History className="w-3 h-3" /> 紀錄
+                    </button>
+                  </div>
+
+                  {reviewSubTab === 'AM' && (
+                    <div className="flex-1 flex flex-col justify-between space-y-2.5 overflow-y-auto pr-0.5">
+                      <div className="bg-white/90 p-2.5 rounded-xl border border-zinc-200/70 flex items-center justify-between">
+                        <span className="text-xs font-semibold text-zinc-700">今日心理與身體能量：</span>
+                        <div className="flex items-center gap-1">
+                          {[1, 2, 3, 4, 5].map((lvl) => (
+                            <button
+                              key={lvl}
+                              onClick={() => updateDailyReviewField('energyLevel', lvl)}
+                              className={`w-6 h-6 rounded-lg text-xs font-bold transition cursor-pointer ${
+                                appState.mindset.dailyReview.energyLevel >= lvl
+                                  ? 'bg-amber-400 text-zinc-950 shadow-sm'
+                                  : 'bg-zinc-100 text-zinc-400'
+                              }`}
+                            >
+                              ⚡
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="flex-1 flex flex-col">
+                        <label className="text-[11px] font-bold text-zinc-700 mb-1">
+                          🎯 今日頭號成功標準（做好哪件事今天就算贏？）
+                        </label>
+                        <textarea
+                          rows={3}
+                          value={appState.mindset.dailyReview.amWinCondition}
+                          onChange={(e) => updateDailyReviewField('amWinCondition', e.target.value)}
+                          placeholder="例如：完成 2 局深度專注 + 籃球實戰 90 分鐘..."
+                          className="w-full flex-1 bg-white/90 rounded-xl p-2.5 text-xs text-zinc-900 border border-zinc-200/80 focus:outline-none select-text resize-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-[11px] font-bold text-zinc-700 block mb-1">
+                          🛡️ 今日最需防範的分心或衝動陷阱：
+                        </label>
+                        <input
+                          type="text"
+                          value={appState.mindset.dailyReview.amTrapToAvoid}
+                          onChange={(e) => updateDailyReviewField('amTrapToAvoid', e.target.value)}
+                          placeholder="例如：避免熬夜滑手機或非必要網購..."
+                          className="w-full bg-white/90 rounded-xl px-2.5 py-2 text-xs text-zinc-900 border border-zinc-200/80 focus:outline-none select-text"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {reviewSubTab === 'PM' && (
+                    <div className="flex-1 flex flex-col justify-between space-y-2.5 overflow-y-auto pr-0.5">
+                      <div>
+                        <label className="text-[11px] font-bold text-zinc-700 block mb-1">
+                          🏆 今日最大收穫與實際推進進度：
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={appState.mindset.dailyReview.pmKeyAchievement}
+                          onChange={(e) =>
+                            updateDailyReviewField('pmKeyAchievement', e.target.value)
+                          }
+                          placeholder="記錄今天完成了什麼、哪裡做得好..."
+                          className="w-full bg-white/90 rounded-xl p-2.5 text-xs text-zinc-900 border border-zinc-200/80 focus:outline-none select-text resize-none"
+                        />
+                      </div>
+
+                      <div
+                        onClick={() =>
+                          updateDailyReviewField(
+                            'pmZeroImpulseCheck',
+                            !appState.mindset.dailyReview.pmZeroImpulseCheck
+                          )
+                        }
+                        className={`p-2.5 rounded-xl border cursor-pointer flex items-center justify-between transition ${
+                          appState.mindset.dailyReview.pmZeroImpulseCheck
+                            ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                            : 'bg-rose-50 border-rose-300 text-rose-900'
+                        }`}
+                      >
+                        <span className="text-xs font-bold">
+                          {appState.mindset.dailyReview.pmZeroImpulseCheck
+                            ? '✓ 今日成功守住「零衝動消費 / 零違規決策」'
+                            : '⚠️ 今日曾發生衝動消費或分心（點擊切換）'}
+                        </span>
+                      </div>
+
+                      <div>
+                        <label className="text-[11px] font-bold text-zinc-700 block mb-1">
+                          🔧 明日最重要的一步微調：
+                        </label>
+                        <input
+                          type="text"
+                          value={appState.mindset.dailyReview.pmTomorrowTweak}
+                          onChange={(e) =>
+                            updateDailyReviewField('pmTomorrowTweak', e.target.value)
+                          }
+                          placeholder="明天早上一開機最先做什麼？"
+                          className="w-full bg-white/90 rounded-xl px-2.5 py-1.5 text-xs text-zinc-900 border border-zinc-200/80 focus:outline-none select-text"
+                        />
+                      </div>
+
+                      <button
+                        onClick={handleArchiveDailyReview}
+                        className="w-full py-2 rounded-xl bg-gradient-to-b from-[#3a3a3c] to-[#1d1d1f] text-white text-xs font-semibold shadow-sm cursor-pointer"
+                      >
+                        ✓ 完成今日閉環並存入歷史紀錄
+                      </button>
+                    </div>
+                  )}
+
+                  {reviewSubTab === 'HISTORY' && (
+                    <div className="flex-1 overflow-y-auto space-y-2 pr-0.5">
+                      {(appState.mindset.reviewHistory || []).length === 0 ? (
+                        <p className="text-xs text-zinc-400 text-center py-8">尚無歷史歸檔紀錄</p>
+                      ) : (
+                        appState.mindset.reviewHistory.map((item) => (
+                          <div
+                            key={item.id}
+                            className="bg-white/90 p-2.5 rounded-xl border border-zinc-200/80 space-y-1"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-[11px] font-bold text-zinc-800">
+                                📅 {item.date} 複盤
+                              </span>
+                              <span
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                  item.zeroImpulse
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-rose-100 text-rose-800'
+                                }`}
+                              >
+                                {item.zeroImpulse ? '🛡️ 零衝動達標' : '⚠️ 需注意紀律'}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-zinc-600">
+                              <strong>晨間目標：</strong>
+                              {item.winCondition}
+                            </p>
+                            <p className="text-[11px] text-zinc-800 font-medium">
+                              <strong>晚間收穫：</strong>
+                              {item.achievement}
+                            </p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* QUADRANT 2: 任務部署與四象限焦點 */}
+            <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-6 flex flex-col h-[550px]">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-base font-bold text-zinc-900">任務部署與四象限焦點</h2>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    全面取代 TickTick：直接在此新增任務並分配艾森豪象限與分類
+                  </p>
+                </div>
+                <button
+                  onClick={() => setActiveTab('matrix')}
+                  className="px-3.5 py-1.5 rounded-xl bg-white/80 hover:bg-white border border-white text-xs font-semibold text-zinc-800 shadow-sm cursor-pointer"
+                >
+                  展開滿版四象限 ⤢
+                </button>
+              </div>
+
+              <form
+                onSubmit={handleAddTask}
+                className="flex flex-wrap sm:flex-nowrap items-center gap-2 mb-4 bg-white/80 p-2 rounded-2xl border border-white"
+              >
+                <input
+                  type="text"
+                  value={quickTaskText}
+                  onChange={(e) => setQuickTaskText(e.target.value)}
+                  placeholder="輸入待辦事項或靈感（按 Enter 新增）..."
+                  className="flex-1 bg-transparent px-3 py-1.5 text-xs text-zinc-800 placeholder-zinc-400 focus:outline-none select-text"
+                />
+                <select
+                  value={quickTaskQuad}
+                  onChange={(e) => setQuickTaskQuad(e.target.value)}
+                  className="bg-zinc-100 text-zinc-700 text-xs font-medium px-2.5 py-1.5 rounded-xl border border-zinc-200 focus:outline-none"
+                >
+                  <option value="IE">🔥 I&E 重要且緊急</option>
+                  <option value="INE">🎯 I&NE 重要不緊急</option>
+                  <option value="NIE">⚡ NI&E 不重要但緊急</option>
+                  <option value="NINE">📥 NI&NE 收件匣/雜事</option>
+                </select>
+                <select
+                  value={quickTaskCat}
+                  onChange={(e) => setQuickTaskCat(e.target.value)}
+                  className="bg-zinc-100 text-zinc-700 text-xs font-medium px-2.5 py-1.5 rounded-xl border border-zinc-200 focus:outline-none"
+                >
+                  {appState.todo.categories.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="submit"
+                  className="px-3.5 py-1.5 rounded-xl bg-gradient-to-b from-[#3a3a3c] to-[#1d1d1f] text-white text-xs font-semibold shrink-0 cursor-pointer"
+                >
+                  ＋新增
+                </button>
+              </form>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 flex-1 overflow-hidden">
+                {[
+                  {
+                    key: 'IE',
+                    title: 'I&E 重要且緊急 (立即做)',
+                    borderCls: 'border-l-4 border-l-rose-500',
+                    textCls: 'text-rose-700',
+                    badgeCls: 'bg-rose-100 text-rose-700'
+                  },
+                  {
+                    key: 'INE',
+                    title: 'I&NE 重要不緊急 (戰略規劃)',
+                    borderCls: 'border-l-4 border-l-blue-600',
+                    textCls: 'text-blue-700',
+                    badgeCls: 'bg-blue-100 text-blue-700'
+                  },
+                  {
+                    key: 'NIE',
+                    title: 'NI&E 不重要但緊急 (速戰速決)',
+                    borderCls: 'border-l-4 border-l-amber-500',
+                    textCls: 'text-amber-700',
+                    badgeCls: 'bg-amber-100 text-amber-700'
+                  },
+                  {
+                    key: 'NINE',
+                    title: 'NI&NE 不重要不緊急 (收件匣)',
+                    borderCls: 'border-l-4 border-l-zinc-400',
+                    textCls: 'text-zinc-600',
+                    badgeCls: 'bg-zinc-200 text-zinc-700'
+                  }
+                ].map((q) => {
+                  const qTasks = appState.todo.tasks.filter((t) => t.quad === q.key);
+                  const pendingCount = qTasks.filter((t) => !t.done).length;
+                  return (
+                    <div
+                      key={q.key}
+                      className={`bg-white/65 border border-white rounded-2xl p-3.5 flex flex-col overflow-hidden ${q.borderCls}`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span className={`text-xs font-bold ${q.textCls}`}>{q.title}</span>
+                        <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${q.badgeCls}`}>
+                          {pendingCount}
+                        </span>
+                      </div>
+                      <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
+                        {qTasks.length === 0 ? (
+                          <p className="text-[11px] text-zinc-400 py-2">無待辦事項</p>
+                        ) : (
+                          qTasks.map((t) => (
+                            <div
+                              key={t.id}
+                              onClick={() => toggleTaskDone(t.id)}
+                              className="flex items-center justify-between gap-2 bg-white/85 px-2.5 py-1.5 rounded-xl border border-zinc-200/60 cursor-pointer"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                {t.done ? (
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                ) : (
+                                  <Circle className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                                )}
+                                <span
+                                  className={`text-xs truncate ${
+                                    t.done ? 'line-through text-zinc-400' : 'text-zinc-800 font-medium'
+                                  }`}
+                                >
+                                  {t.text}
+                                </span>
+                              </div>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 shrink-0">
+                                {t.cat}
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* QUADRANT 3: Apple Bio-Twin HUD */}
+            <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-6 flex flex-col justify-between h-[520px] relative overflow-hidden">
+              <div className="flex items-center justify-between z-10">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono font-bold uppercase tracking-widest px-2 py-0.5 rounded bg-zinc-900 text-white">
+                      BIO-TWIN HUD
+                    </span>
+                    <h2 className="text-base font-bold text-zinc-900">身體機能生物掃描艙</h2>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-gradient-to-b from-[#f5f5f7] to-[#e5e5ea] border border-black/10 font-semibold text-zinc-700">
+                      179.5cm ‧ 29yo
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    點擊解剖部位數據艙可更新體重、體脂與睡眠；底部切換重訓/籃球即時充能四肢裝甲
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setWeightInput(appState.health.weightKg);
+                    setBfInput(appState.health.bodyFatPct);
+                    setSleepInput(appState.health.sleepHours);
+                    setShowHealthModal(true);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-white/85 hover:bg-white border border-white text-xs font-semibold text-zinc-800 shadow-sm cursor-pointer shrink-0"
+                >
+                  ✎ 校準生理數據
+                </button>
+              </div>
+
+              {(() => {
+                const gymCount = appState.health.weeklySchedule.filter((d) => d.type === 'GYM').length;
+                const bballCount = appState.health.weeklySchedule.filter(
+                  (d) => d.type === 'BASKETBALL'
+                ).length;
+                const sleepOk = Number(appState.health.sleepHours) >= 7.5;
+                const waterPct = Math.min(
+                  100,
+                  Math.round(((Number(appState.health.waterMl) || 0) / 2800) * 100)
+                );
+                const bfArmorPct = Math.min(
+                  100,
+                  Math.max(15, Math.round(((20 - Number(appState.health.bodyFatPct)) / (20 - 14.5)) * 100))
+                );
+
+                return (
+                  <div className="grid grid-cols-12 gap-3 my-2 flex-1 items-center">
+                    <div className="col-span-4 flex flex-col justify-between h-full py-1 space-y-2">
+                      <div
+                        onClick={() => setShowHealthModal(true)}
+                        className="bg-white/80 hover:bg-white border border-white rounded-2xl p-3 shadow-sm cursor-pointer transition relative"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-mono font-bold uppercase text-zinc-400">
+                            [01] CNS ‧ 腦部恢復
+                          </span>
+                          <span
+                            className={`w-2 h-2 rounded-full ${
+                              sleepOk ? 'bg-emerald-500' : 'bg-amber-500'
+                            }`}
+                          />
+                        </div>
+                        <div className="flex items-baseline gap-1 mt-0.5">
+                          <span className="text-lg font-bold font-mono text-zinc-900">
+                            {Number(appState.health.sleepHours).toFixed(1)}
+                          </span>
+                          <span className="text-[11px] text-zinc-500">hrs 睡眠</span>
+                        </div>
+                        <div className="w-full h-1.5 bg-zinc-200 rounded-full mt-1.5 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${
+                              sleepOk ? 'bg-emerald-500' : 'bg-amber-500'
+                            }`}
+                            style={{
+                              width: `${Math.min(
+                                100,
+                                Math.round((Number(appState.health.sleepHours) / 8) * 100)
+                              )}%`
+                            }}
+                          />
+                        </div>
+                        <span className="text-[10px] text-zinc-500 mt-1 block">
+                          Apple Watch 目標 ≥ 7.5h
+                        </span>
+                      </div>
+
+                      <div className="bg-white/80 border border-white rounded-2xl p-3 shadow-sm">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-mono font-bold uppercase text-blue-600">
+                            [02] UPPER ‧ 上肢重訓
+                          </span>
+                          <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">
+                            🏋️‍♂️ {gymCount} 練/週
+                          </span>
+                        </div>
+                        <div className="text-xs font-bold text-zinc-800 mt-1">
+                          肌肥大與力量負荷
+                        </div>
+                        <div className="grid grid-cols-4 gap-1 mt-2">
+                          {[1, 2, 3, 4].map((seg) => (
+                            <div
+                              key={seg}
+                              className={`h-2 rounded-sm transition-all ${
+                                gymCount >= seg ? 'bg-blue-600 shadow-sm' : 'bg-zinc-200'
+                              }`}
+                            />
+                          ))}
+                        </div>
+                        <span className="text-[10px] text-zinc-500 mt-1 block">
+                          目標每週 3–4 次重訓充能
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="col-span-3 h-full flex flex-col items-center justify-center relative bg-gradient-to-b from-white/50 via-white/80 to-white/50 rounded-2xl border border-white/90 p-2">
+                      <svg viewBox="0 0 140 240" className="w-full h-[210px] overflow-visible">
+                        <circle
+                          cx="70"
+                          cy="115"
+                          r="58"
+                          fill="none"
+                          stroke="#cbd5e1"
+                          strokeWidth="0.75"
+                          strokeDasharray="3 3"
+                        />
+                        <circle
+                          cx="70"
+                          cy="115"
+                          r="38"
+                          fill="none"
+                          stroke="#e2e8f0"
+                          strokeWidth="0.75"
+                        />
+                        <line
+                          x1="70"
+                          y1="8"
+                          x2="70"
+                          y2="232"
+                          stroke="#cbd5e1"
+                          strokeWidth="0.6"
+                          strokeDasharray="2 2"
+                        />
+
+                        <polyline
+                          points="55,28 25,22 2,22"
+                          fill="none"
+                          stroke={sleepOk ? '#10b981' : '#f59e0b'}
+                          strokeWidth="1.2"
+                        />
+                        <polyline
+                          points="86,82 115,48 138,48"
+                          fill="none"
+                          stroke="#10b981"
+                          strokeWidth="1.2"
+                        />
+                        <polyline
+                          points="36,92 16,155 2,155"
+                          fill="none"
+                          stroke="#2563eb"
+                          strokeWidth="1.2"
+                        />
+                        <polyline
+                          points="86,172 118,168 138,168"
+                          fill="none"
+                          stroke="#d97706"
+                          strokeWidth="1.2"
+                        />
+
+                        <circle
+                          cx="70"
+                          cy="28"
+                          r="14"
+                          fill={sleepOk ? 'rgba(16,185,129,0.18)' : 'rgba(245,158,11,0.2)'}
+                          stroke={sleepOk ? '#059669' : '#d97706'}
+                          strokeWidth="2"
+                        />
+                        <circle
+                          cx="70"
+                          cy="28"
+                          r="4"
+                          fill={sleepOk ? '#059669' : '#d97706'}
+                        />
+
+                        <path
+                          d="M44,54 L30,108 L40,111 L50,66 Z"
+                          fill={gymCount > 0 ? 'rgba(37,99,235,0.22)' : 'rgba(148,163,184,0.15)'}
+                          stroke={gymCount > 0 ? '#2563eb' : '#64748b'}
+                          strokeWidth="1.8"
+                          strokeLinejoin="round"
+                        />
+                        <path
+                          d="M96,54 L110,108 L100,111 L90,66 Z"
+                          fill={gymCount > 0 ? 'rgba(37,99,235,0.22)' : 'rgba(148,163,184,0.15)'}
+                          stroke={gymCount > 0 ? '#2563eb' : '#64748b'}
+                          strokeWidth="1.8"
+                          strokeLinejoin="round"
+                        />
+
+                        <polygon
+                          points="48,50 92,50 84,122 56,122"
+                          fill="rgba(16,185,129,0.16)"
+                          stroke="#059669"
+                          strokeWidth="2"
+                          strokeLinejoin="round"
+                        />
+                        <line x1="56" y1="72" x2="84" y2="72" stroke="#059669" strokeWidth="1.2" />
+                        <line x1="58" y1="90" x2="82" y2="90" stroke="#059669" strokeWidth="1.2" />
+                        <line x1="60" y1="106" x2="80" y2="106" stroke="#059669" strokeWidth="1.2" />
+
+                        <polygon
+                          points="56,126 68,126 65,208 51,208"
+                          fill={bballCount > 0 ? 'rgba(217,119,6,0.24)' : 'rgba(148,163,184,0.15)'}
+                          stroke={bballCount > 0 ? '#d97706' : '#64748b'}
+                          strokeWidth="1.8"
+                          strokeLinejoin="round"
+                        />
+                        <polygon
+                          points="72,126 84,126 89,208 75,208"
+                          fill={bballCount > 0 ? 'rgba(217,119,6,0.24)' : 'rgba(148,163,184,0.15)'}
+                          stroke={bballCount > 0 ? '#d97706' : '#64748b'}
+                          strokeWidth="1.8"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                      <span className="text-[10px] font-mono font-bold text-zinc-500 tracking-wider">
+                        BMI {bmiValue} ‧ ACTIVE
+                      </span>
+                    </div>
+
+                    <div className="col-span-3 flex flex-col justify-between h-full py-1 space-y-2">
+                      <div
+                        onClick={() => setShowHealthModal(true)}
+                        className="bg-white/80 hover:bg-white border border-white rounded-2xl p-3 shadow-sm cursor-pointer transition"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-mono font-bold uppercase text-emerald-700">
+                            [03] CORE ‧ 體態裝甲
+                          </span>
+                        </div>
+                        <div className="flex items-baseline justify-between mt-0.5">
+                          <div>
+                            <span className="text-lg font-bold font-mono text-zinc-900">
+                              {Number(appState.health.bodyFatPct).toFixed(1)}%
+                            </span>
+                            <span className="text-[10px] text-zinc-500 ml-1">體脂</span>
+                          </div>
+                          <span className="text-xs font-bold font-mono text-zinc-700">
+                            {Number(appState.health.weightKg).toFixed(1)}kg
+                          </span>
+                        </div>
+                        <div className="w-full h-1.5 bg-zinc-200 rounded-full mt-1.5 overflow-hidden">
+                          <div
+                            className="h-full bg-emerald-600 rounded-full transition-all"
+                            style={{ width: `${bfArmorPct}%` }}
+                          />
+                        </div>
+                        <span className="text-[10px] text-emerald-700 font-medium mt-1 block">
+                          目標：76kg / 14.5% BF
+                        </span>
+                      </div>
+
+                      <div className="bg-white/80 border border-white rounded-2xl p-3 shadow-sm">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-mono font-bold uppercase text-amber-700">
+                            [04] LOWER ‧ 實戰爆發
+                          </span>
+                          <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-800">
+                            🏀 {bballCount} 場/週
+                          </span>
+                        </div>
+                        <div className="text-xs font-bold text-zinc-800 mt-1">
+                          下肢敏捷與心肺燃脂
+                        </div>
+                        <div className="grid grid-cols-3 gap-1 mt-2">
+                          {[1, 2, 3].map((seg) => (
+                            <div
+                              key={seg}
+                              className={`h-2 rounded-sm transition-all ${
+                                bballCount >= seg ? 'bg-amber-500 shadow-sm' : 'bg-zinc-200'
+                              }`}
+                            />
+                          ))}
+                        </div>
+                        <span className="text-[10px] text-zinc-500 mt-1 block">
+                          籃球實戰燃脂加速中
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="col-span-2 h-full bg-white/80 border border-white rounded-2xl p-2.5 flex flex-col items-center justify-between shadow-sm">
+                      <div className="text-center">
+                        <span className="text-[10px] font-mono font-bold text-blue-700 block">
+                          H2O 液態艙
+                        </span>
+                        <span className="text-xs font-bold font-mono text-zinc-900">
+                          {waterPct}%
+                        </span>
+                      </div>
+
+                      <div className="w-9 flex-1 my-1.5 rounded-xl bg-zinc-200/80 border border-zinc-300/60 overflow-hidden flex flex-col justify-end p-0.5 relative">
+                        <div
+                          className="w-full rounded-lg bg-gradient-to-t from-blue-600 to-sky-400 transition-all duration-500"
+                          style={{ height: `${waterPct}%` }}
+                        />
+                      </div>
+
+                      <div className="text-center w-full space-y-1">
+                        <span className="text-[10px] font-mono text-zinc-500 block">
+                          {appState.health.waterMl}ml
+                        </span>
+                        <button
+                          onClick={() => addWaterMl(250)}
+                          className="w-full py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold cursor-pointer shadow-sm"
+                        >
+                          +250ml
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="space-y-2 pt-2 border-t border-zinc-200/80">
+                <div className="grid grid-cols-7 gap-1.5">
+                  {appState.health.weeklySchedule.map((item, idx) => {
+                    const cfg =
+                      item.type === 'GYM'
+                        ? {
+                            icon: '🏋️‍♂️',
+                            label: '重訓',
+                            cls: 'bg-blue-600 text-white border-blue-700 shadow-sm'
+                          }
+                        : item.type === 'BASKETBALL'
+                        ? {
+                            icon: '🏀',
+                            label: '籃球',
+                            cls: 'bg-amber-500 text-zinc-950 border-amber-600 font-bold shadow-sm'
+                          }
+                        : {
+                            icon: '☕',
+                            label: '修復',
+                            cls: 'bg-white/80 text-zinc-500 border-zinc-200'
+                          };
+                    return (
+                      <button
+                        key={item.day}
+                        onClick={() => cycleWorkoutDay(idx)}
+                        className={`py-1.5 px-1 rounded-xl border ${cfg.cls} flex items-center justify-center gap-1 text-[11px] font-semibold transition hover:scale-[1.02] cursor-pointer`}
+                      >
+                        <span>{item.day.replace('週', '')}</span>
+                        <span>{cfg.icon}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-bold text-zinc-600 shrink-0">
+                    每日防線：
+                  </span>
+                  <div className="flex items-center gap-1.5 overflow-x-auto">
+                    {appState.health.dailyHabits.map((hb) => (
+                      <button
+                        key={hb.id}
+                        onClick={() => toggleHabit(hb.id)}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition flex items-center gap-1 shrink-0 cursor-pointer ${
+                          hb.done
+                            ? 'bg-emerald-600 text-white shadow-sm'
+                            : 'bg-white/75 text-zinc-700 border border-white'
+                        }`}
+                      >
+                        <span>{hb.done ? '✓' : '○'}</span> {hb.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* QUADRANT 4: Financial Cockpit HUD */}
+            <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-6 flex flex-col justify-between h-[520px]">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono font-bold uppercase tracking-widest px-2 py-0.5 rounded bg-zinc-900 text-white">
+                      FIN-COCKPIT HUD
+                    </span>
+                    <h2 className="text-base font-bold text-zinc-900">財務重建雙渦輪座艙儀表</h2>
+                  </div>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    外環：翠綠保命儲蓄護盾 ($30k) ‧ 內環：緋紅負債消融進度 ({finTotals.debtPaidPct}%)
+                  </p>
+                </div>
+                <button
+                  onClick={() => setActiveTab('finance')}
+                  className="px-3.5 py-1.5 rounded-xl bg-gradient-to-b from-[#3a3a3c] to-[#1d1d1f] text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm cursor-pointer shrink-0"
+                >
+                  完整財務儀表板 ➔
+                </button>
+              </div>
+
+              {(() => {
+                const outerR = 76;
+                const innerR = 58;
+                const outerCircum = 2 * Math.PI * outerR;
+                const innerCircum = 2 * Math.PI * innerR;
+                const outerOffset = outerCircum - (finTotals.savingsGoalPct / 100) * outerCircum;
+                const innerOffset = innerCircum - (finTotals.debtPaidPct / 100) * innerCircum;
+
+                return (
+                  <div className="grid grid-cols-12 gap-3 my-2 flex-1 items-center">
+                    <div className="col-span-4 flex flex-col justify-between h-full py-1 space-y-2">
+                      <div
+                        onClick={() => setActiveTab('finance')}
+                        className="bg-white/80 hover:bg-white border border-white border-l-4 border-l-emerald-500 rounded-2xl p-3 shadow-sm cursor-pointer transition"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-mono font-bold uppercase text-emerald-700">
+                            [SHIELD] 儲蓄護盾
+                          </span>
+                          <span className="text-[10px] font-mono font-bold text-emerald-700">
+                            {finTotals.savingsGoalPct}%
+                          </span>
+                        </div>
+                        <div className="text-lg font-bold font-mono text-zinc-900 mt-0.5">
+                          {formatCurrency(finTotals.savings)}
+                        </div>
+                        <span className="text-[10px] text-zinc-500 block mt-0.5">
+                          保命池目標：$30,000
+                        </span>
+                      </div>
+
+                      <div
+                        onClick={() => setActiveTab('finance')}
+                        className="bg-white/80 hover:bg-white border border-white border-l-4 border-l-blue-500 rounded-2xl p-3 shadow-sm cursor-pointer transition"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-mono font-bold uppercase text-blue-700">
+                            [FUEL] 日常活存
+                          </span>
+                          <span className="text-[10px] font-mono text-zinc-400">CURRENTS</span>
+                        </div>
+                        <div className="text-lg font-bold font-mono text-zinc-900 mt-0.5">
+                          {formatCurrency(finTotals.currents)}
+                        </div>
+                        <span className="text-[10px] text-zinc-500 block mt-0.5">
+                          每月可支配結餘：{formatCurrency(finTotals.projectedSurplus)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div
+                      onClick={() => setActiveTab('finance')}
+                      className="col-span-4 h-full flex flex-col items-center justify-center relative bg-gradient-to-b from-white/50 via-white/85 to-white/50 rounded-2xl border border-white/90 p-2 cursor-pointer"
+                      title="點擊進入完整財務儀表板"
+                    >
+                      <svg viewBox="0 0 190 190" className="w-[172px] h-[172px]">
+                        <circle
+                          cx="95"
+                          cy="95"
+                          r={outerR}
+                          fill="none"
+                          stroke="#e2e8f0"
+                          strokeWidth="10"
+                        />
+                        <circle
+                          cx="95"
+                          cy="95"
+                          r={outerR}
+                          fill="none"
+                          stroke="#059669"
+                          strokeWidth="10"
+                          strokeLinecap="round"
+                          strokeDasharray={outerCircum}
+                          strokeDashoffset={outerOffset}
+                          transform="rotate(-90 95 95)"
+                          style={{ transition: 'stroke-dashoffset 0.6s ease' }}
+                        />
+
+                        <circle
+                          cx="95"
+                          cy="95"
+                          r={innerR}
+                          fill="none"
+                          stroke="#ffe4e6"
+                          strokeWidth="10"
+                        />
+                        <circle
+                          cx="95"
+                          cy="95"
+                          r={innerR}
+                          fill="none"
+                          stroke="#e11d48"
+                          strokeWidth="10"
+                          strokeLinecap="round"
+                          strokeDasharray={innerCircum}
+                          strokeDashoffset={innerOffset}
+                          transform="rotate(-90 95 95)"
+                          style={{ transition: 'stroke-dashoffset 0.6s ease' }}
+                        />
+
+                        <text
+                          x="95"
+                          y="74"
+                          textAnchor="middle"
+                          className="fill-zinc-400 text-[9px] font-mono font-bold uppercase tracking-widest"
+                        >
+                          NET WORTH
+                        </text>
+                        <text
+                          x="95"
+                          y="98"
+                          textAnchor="middle"
+                          className={`text-[17px] font-mono font-extrabold ${
+                            finTotals.netWorth >= 0 ? 'fill-emerald-700' : 'fill-zinc-900'
+                          }`}
+                        >
+                          {formatCurrency(finTotals.netWorth)}
+                        </text>
+                        <text
+                          x="95"
+                          y="118"
+                          textAnchor="middle"
+                          className="fill-rose-600 text-[10px] font-mono font-bold"
+                        >
+                          清債 {finTotals.debtPaidPct}%
+                        </text>
+                      </svg>
+                    </div>
+
+                    <div className="col-span-4 flex flex-col justify-between h-full py-1 space-y-2">
+                      <div
+                        onClick={() => setActiveTab('finance')}
+                        className="bg-white/80 hover:bg-white border border-white border-r-4 border-r-rose-500 rounded-2xl p-3 shadow-sm cursor-pointer transition"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-mono font-bold uppercase text-rose-600">
+                            [THREAT] 剩餘負債
+                          </span>
+                          <span className="text-[10px] font-mono font-bold text-rose-600">
+                            -{finTotals.debtPaidPct}%
+                          </span>
+                        </div>
+                        <div className="text-lg font-bold font-mono text-rose-600 mt-0.5">
+                          {formatCurrency(finTotals.debt)}
+                        </div>
+                        <span className="text-[10px] text-zinc-500 block mt-0.5">
+                          初始峰值：{formatCurrency(finTotals.initialDebtTotal)}
+                        </span>
+                      </div>
+
+                      <div
+                        onClick={() => setActiveTab('finance')}
+                        className="bg-white/80 hover:bg-white border border-white border-r-4 border-r-indigo-500 rounded-2xl p-3 shadow-sm cursor-pointer transition"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-mono font-bold uppercase text-indigo-700">
+                            [RADAR] 投資觀測倉
+                          </span>
+                          <span className="text-[10px] font-mono text-zinc-400">INVEST</span>
+                        </div>
+                        <div className="text-lg font-bold font-mono text-zinc-900 mt-0.5">
+                          {formatCurrency(finTotals.investment)}
+                        </div>
+                        <span className="text-[10px] text-emerald-700 font-medium block mt-0.5">
+                          退訂已年省：{formatCurrency(finTotals.savedSubYearly)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <form
+                onSubmit={handleCmdQuickTx}
+                className="bg-white/85 p-2.5 rounded-2xl border border-white flex flex-wrap sm:flex-nowrap items-center gap-2 shadow-sm"
+              >
+                <select
+                  value={cmdTxType}
+                  onChange={(e) => setCmdTxType(e.target.value)}
+                  className="bg-zinc-900 text-white text-xs font-semibold px-2.5 py-1.5 rounded-xl"
+                >
+                  <option value="DEBT_PAY">🔥 償還負債</option>
+                  <option value="SAVING_ADD">🌱 存入儲蓄</option>
+                  <option value="EXPENSE">－日常開銷</option>
+                  <option value="INCOME">＋收到收入</option>
+                </select>
+                <input
+                  type="text"
+                  value={cmdTxTitle}
+                  onChange={(e) => setCmdTxTitle(e.target.value)}
+                  placeholder="戰術記帳說明 (如：還卡數、發薪儲蓄)..."
+                  className="flex-1 bg-transparent px-2.5 py-1 text-xs text-zinc-800 placeholder-zinc-400 focus:outline-none select-text"
+                />
+                <input
+                  type="number"
+                  value={cmdTxAmount}
+                  onChange={(e) => setCmdTxAmount(e.target.value)}
+                  placeholder="金額 $"
+                  className="w-24 bg-zinc-100 px-2.5 py-1.5 rounded-xl text-xs font-bold font-mono text-zinc-900 focus:outline-none select-text"
+                />
+                <button
+                  type="submit"
+                  className="px-3.5 py-1.5 rounded-xl bg-gradient-to-b from-[#3a3a3c] to-[#1d1d1f] text-white text-xs font-semibold shrink-0 cursor-pointer shadow-sm"
+                >
+                  發射記帳
+                </button>
+              </form>
+            </div>
+          </section>
+        )}
+
+        {/* VIEW 2: 💰 財務監控儀表板 */}
+        {activeTab === 'finance' && (
+          <section className="space-y-6">
+            <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-6">
+              <div className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-zinc-200/80">
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                    Personal Finance Command Center
+                  </span>
+                  <h2 className="text-2xl font-bold text-zinc-900 mt-0.5">個人財務監控儀表板</h2>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="bg-white/75 border border-white px-4 py-2.5 rounded-2xl shadow-sm">
+                    <span className="text-[11px] text-zinc-500 block">總資產</span>
+                    <span className="text-lg font-bold text-emerald-700">
+                      {formatCurrency(finTotals.totalAssets)}
+                    </span>
+                  </div>
+                  <div className="bg-white/75 border border-white px-4 py-2.5 rounded-2xl shadow-sm">
+                    <span className="text-[11px] text-zinc-500 block">總負債</span>
+                    <span className="text-lg font-bold text-rose-600">
+                      {formatCurrency(finTotals.debt)}
+                    </span>
+                  </div>
+                  <div className="bg-gradient-to-b from-[#3a3a3c] to-[#1d1d1f] px-5 py-2.5 rounded-2xl shadow-md">
+                    <span className="text-[11px] text-zinc-300 block">真實總淨值</span>
+                    <span className="text-lg font-bold text-white">
+                      {formatCurrency(finTotals.netWorth)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-5">
+                <div className="bg-white/65 border border-white p-4 rounded-2xl flex items-center justify-between">
+                  <div>
+                    <span className="text-xs text-zinc-500 font-medium">每月預計總收入</span>
+                    <div className="flex items-center gap-1 mt-1">
+                      <span className="text-sm font-bold text-zinc-700">$</span>
+                      <input
+                        type="number"
+                        value={appState.finance.monthlyIncome}
+                        onChange={(e) =>
+                          setAppState((p) => ({
+                            ...p,
+                            finance: { ...p.finance, monthlyIncome: Number(e.target.value) || 0 }
+                          }))
+                        }
+                        className="w-28 bg-white px-2 py-1 rounded-lg text-base font-bold text-zinc-900 border border-zinc-300 focus:outline-none select-text"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white/65 border border-white p-4 rounded-2xl flex items-center justify-between">
+                  <div>
+                    <span className="text-xs text-zinc-500 font-medium">每月日常開銷上限</span>
+                    <div className="flex items-center gap-1 mt-1">
+                      <span className="text-sm font-bold text-zinc-700">$</span>
+                      <input
+                        type="number"
+                        value={appState.finance.monthlyExpenseBudget}
+                        onChange={(e) =>
+                          setAppState((p) => ({
+                            ...p,
+                            finance: {
+                              ...p.finance,
+                              monthlyExpenseBudget: Number(e.target.value) || 0
+                            }
+                          }))
+                        }
+                        className="w-28 bg-white px-2 py-1 rounded-lg text-base font-bold text-zinc-900 border border-zinc-300 focus:outline-none select-text"
+                      />
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[11px] text-zinc-500 block">本月已記帳開銷</span>
+                    <span className="text-sm font-bold text-blue-700">
+                      {formatCurrency(finTotals.monthExpenseTotal)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="bg-white/65 border border-white p-4 rounded-2xl flex items-center justify-between">
+                  <div>
+                    <span className="text-xs text-zinc-500 font-medium">啟用中每月訂閱總額</span>
+                    <div className="text-lg font-bold text-purple-700 mt-1">
+                      {formatCurrency(finTotals.activeSubMonthly)} / 月
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[11px] text-emerald-700 font-medium block">已砍除每年省下</span>
+                    <span className="text-sm font-bold text-emerald-700">
+                      {formatCurrency(finTotals.savedSubYearly)} / 年
+                    </span>
+                  </div>
+                </div>
+
+                <div className="bg-white/65 border border-white p-4 rounded-2xl flex items-center justify-between">
+                  <div>
+                    <span className="text-xs text-zinc-500 font-medium">預計結餘</span>
+                    <div className="text-lg font-bold text-emerald-700 mt-1">
+                      {formatCurrency(finTotals.projectedSurplus)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* SECTION 1: 帳戶管理 */}
+            <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-6">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+                <div>
+                  <h3 className="text-base font-bold text-zinc-900">
+                    1. 四大帳戶與負債明細管理 (Savings / Currents / Debt / Investment)
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setShowAddAccModal(true)}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-b from-[#3a3a3c] to-[#1d1d1f] text-white text-xs font-semibold shadow-sm cursor-pointer"
+                >
+                  ＋ 新增帳戶 / 負債項目
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                {[
+                  { key: 'DEBT', title: '🔥 負債項目', badgeCls: 'bg-rose-100 text-rose-800', borderCls: 'border-t-4 border-t-rose-500' },
+                  { key: 'SAVINGS', title: '🌱 儲蓄帳戶', badgeCls: 'bg-emerald-100 text-emerald-800', borderCls: 'border-t-4 border-t-emerald-500' },
+                  { key: 'CURRENTS', title: '💧 日常活存', badgeCls: 'bg-blue-100 text-blue-800', borderCls: 'border-t-4 border-t-blue-500' },
+                  { key: 'INVESTMENT', title: '📈 投資部位', badgeCls: 'bg-indigo-100 text-indigo-800', borderCls: 'border-t-4 border-t-indigo-500' }
+                ].map((cat) => {
+                  const items = appState.finance.accounts.filter((a) => a.category === cat.key);
+                  const catSum = items.reduce((s, i) => s + (Number(i.balance) || 0), 0);
+                  return (
+                    <div
+                      key={cat.key}
+                      className={`bg-white/65 border border-white rounded-2xl p-5 ${cat.borderCls} flex flex-col justify-between`}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-sm font-bold text-zinc-900">{cat.title}</span>
+                          <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${cat.badgeCls}`}>
+                            小計：{formatCurrency(catSum)}
+                          </span>
+                        </div>
+                        <div className="space-y-2.5">
+                          {items.length === 0 ? (
+                            <p className="text-xs text-zinc-400 py-3">尚無項目</p>
+                          ) : (
+                            items.map((acc) => {
+                              const itemPayoffPct =
+                                acc.category === 'DEBT' && acc.initialDebt > 0
+                                  ? Math.min(
+                                      100,
+                                      Math.max(
+                                        0,
+                                        Math.round(
+                                          ((acc.initialDebt - acc.balance) / acc.initialDebt) * 100
+                                        )
+                                      )
+                                    )
+                                  : null;
+                              return (
+                                <div
+                                  key={acc.id}
+                                  className="bg-white/90 rounded-xl p-3 border border-zinc-200/80 space-y-2"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-xs font-bold text-zinc-900">
+                                          {acc.name}
+                                        </span>
+                                        {acc.category === 'DEBT' && acc.apr > 0 && (
+                                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 font-semibold">
+                                            年息 {acc.apr}%
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="flex items-center gap-1 mt-1">
+                                        <span className="text-xs text-zinc-400">$</span>
+                                        <input
+                                          type="number"
+                                          value={acc.balance}
+                                          onChange={(e) =>
+                                            setAccountBalanceDirect(acc.id, e.target.value)
+                                          }
+                                          className="w-28 bg-zinc-100 px-2 py-0.5 rounded text-xs font-bold text-zinc-900 border border-zinc-300 focus:outline-none select-text"
+                                        />
+                                      </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-1.5">
+                                      <button
+                                        onClick={() => adjustAccountBalance(acc.id, -500)}
+                                        className="px-2 py-1 rounded-lg bg-zinc-200 hover:bg-zinc-300 text-zinc-800 text-[11px] font-bold cursor-pointer"
+                                      >
+                                        -500
+                                      </button>
+                                      <button
+                                        onClick={() => adjustAccountBalance(acc.id, 500)}
+                                        className="px-2 py-1 rounded-lg bg-zinc-200 hover:bg-zinc-300 text-zinc-800 text-[11px] font-bold cursor-pointer"
+                                      >
+                                        +500
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          setAdjustingAccId(
+                                            adjustingAccId === acc.id ? null : acc.id
+                                          );
+                                          setCustomDeltaInput('');
+                                        }}
+                                        className="px-2.5 py-1 rounded-lg bg-gradient-to-b from-[#f5f5f7] to-[#e5e5ea] border border-black/10 text-[11px] font-semibold text-zinc-700 cursor-pointer"
+                                      >
+                                        ±自訂
+                                      </button>
+                                      <button
+                                        onClick={() => handleDeleteAccount(acc.id)}
+                                        className="px-2 py-1 rounded-lg text-zinc-400 hover:text-rose-600 text-xs font-bold cursor-pointer"
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {itemPayoffPct !== null && (
+                                    <div className="pt-1">
+                                      <div className="flex justify-between text-[10px] text-zinc-500 mb-0.5">
+                                        <span>清還進度</span>
+                                        <span className="font-bold text-rose-600">{itemPayoffPct}%</span>
+                                      </div>
+                                      <div className="w-full h-1.5 bg-zinc-200 rounded-full overflow-hidden">
+                                        <div
+                                          className="h-full bg-rose-500 rounded-full transition-all"
+                                          style={{ width: `${itemPayoffPct}%` }}
+                                        />
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {adjustingAccId === acc.id && (
+                                    <div className="pt-2 border-t border-zinc-100 flex items-center justify-end gap-2">
+                                      <input
+                                        type="number"
+                                        value={customDeltaInput}
+                                        onChange={(e) => setCustomDeltaInput(e.target.value)}
+                                        placeholder="+1000 / -500"
+                                        className="w-28 bg-zinc-100 px-2 py-1 rounded-lg text-xs font-bold text-zinc-900 border border-zinc-300 focus:outline-none select-text"
+                                      />
+                                      <button
+                                        onClick={() => handleApplyCustomDelta(acc.id)}
+                                        className="px-3 py-1 rounded-lg bg-zinc-900 text-white text-xs font-semibold cursor-pointer"
+                                      >
+                                        確定
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* SECTION 2 & 3: Transactions & Subscriptions */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              <div className="lg:col-span-7 bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-6 flex flex-col">
+                <div className="mb-4">
+                  <h3 className="text-base font-bold text-zinc-900">
+                    2. 收支與清債明細表 (Transaction Ledger)
+                  </h3>
+                </div>
+
+                <form
+                  onSubmit={handleFullTxSubmit}
+                  className="bg-white/85 p-3.5 rounded-2xl border border-white mb-4 space-y-3"
+                >
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                    <select
+                      value={txType}
+                      onChange={(e) => setTxType(e.target.value)}
+                      className="bg-zinc-100 text-zinc-800 text-xs font-semibold px-3 py-2 rounded-xl border border-zinc-200"
+                    >
+                      <option value="EXPENSE">－ 日常開銷</option>
+                      <option value="DEBT_PAY">🔥 償還負債</option>
+                      <option value="SAVING_ADD">🌱 存入儲蓄</option>
+                      <option value="INCOME">＋ 收到收入</option>
+                    </select>
+                    <input
+                      type="text"
+                      value={txTitle}
+                      onChange={(e) => setTxTitle(e.target.value)}
+                      placeholder="項目名稱"
+                      className="sm:col-span-2 bg-zinc-100 px-3 py-2 rounded-xl text-xs text-zinc-900 border border-zinc-200 focus:outline-none select-text"
+                    />
+                    <input
+                      type="number"
+                      value={txAmount}
+                      onChange={(e) => setTxAmount(e.target.value)}
+                      placeholder="金額 $"
+                      className="bg-zinc-100 px-3 py-2 rounded-xl text-xs font-bold text-zinc-900 border border-zinc-200 focus:outline-none select-text"
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                    <select
+                      value={txLinkedAcc}
+                      onChange={(e) => setTxLinkedAcc(e.target.value)}
+                      className="bg-zinc-100 text-zinc-800 text-xs px-2.5 py-1.5 rounded-lg border border-zinc-200"
+                    >
+                      <option value="AUTO">自動對應預設帳戶</option>
+                      <option value="NONE">不連動帳戶</option>
+                      {appState.finance.accounts.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="submit"
+                      className="px-4 py-1.5 rounded-xl bg-gradient-to-b from-[#3a3a3c] to-[#1d1d1f] text-white text-xs font-semibold cursor-pointer"
+                    >
+                      ＋ 新增記帳
+                    </button>
+                  </div>
+                </form>
+
+                <div className="flex-1 overflow-y-auto max-h-[340px] space-y-2 pr-1">
+                  {appState.finance.transactions.map((t) => (
+                    <div
+                      key={t.id}
+                      className="bg-white/75 border border-white rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-2"
+                    >
+                      <div>
+                        <div className="text-xs font-bold text-zinc-900">{t.title}</div>
+                        <div className="text-[10px] text-zinc-500">
+                          {t.date} {t.accountName ? `‧ ${t.accountName}` : ''}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2.5">
+                        <span className="text-xs font-bold text-zinc-900">
+                          {formatCurrency(t.amount)}
+                        </span>
+                        <button
+                          onClick={() => handleDeleteTx(t.id)}
+                          className="text-zinc-400 hover:text-rose-600 text-xs font-bold cursor-pointer"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="lg:col-span-5 bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-6 flex flex-col">
+                <div className="mb-4">
+                  <h3 className="text-base font-bold text-zinc-900">
+                    3. 每月訂閱生死簿 (Subscription Manager)
+                  </h3>
+                </div>
+
+                <form
+                  onSubmit={handleAddSub}
+                  className="bg-white/85 p-3 rounded-2xl border border-white mb-4 flex flex-wrap sm:flex-nowrap items-center gap-2"
+                >
+                  <input
+                    type="text"
+                    value={subName}
+                    onChange={(e) => setSubName(e.target.value)}
+                    placeholder="訂閱名稱"
+                    className="flex-1 bg-zinc-100 px-3 py-1.5 rounded-xl text-xs text-zinc-900 border border-zinc-200 focus:outline-none select-text"
+                  />
+                  <input
+                    type="number"
+                    value={subCost}
+                    onChange={(e) => setSubCost(e.target.value)}
+                    placeholder="月費"
+                    className="w-20 bg-zinc-100 px-2.5 py-1.5 rounded-xl text-xs font-bold text-zinc-900 border border-zinc-200 focus:outline-none select-text"
+                  />
+                  <button
+                    type="submit"
+                    className="px-3.5 py-1.5 rounded-xl bg-gradient-to-b from-[#3a3a3c] to-[#1d1d1f] text-white text-xs font-semibold shrink-0 cursor-pointer"
+                  >
+                    ＋
+                  </button>
+                </form>
+
+                <div className="flex-1 overflow-y-auto max-h-[340px] space-y-2 pr-1">
+                  {appState.finance.subscriptions.map((s) => (
+                    <div
+                      key={s.id}
+                      className={`bg-white/75 border border-white rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-2 ${
+                        s.active ? '' : 'opacity-65'
+                      }`}
+                    >
+                      <div>
+                        <span className={`text-xs font-bold ${s.active ? 'text-zinc-900' : 'line-through text-zinc-500'}`}>
+                          {s.name}
+                        </span>
+                        <div className="text-[10px] text-zinc-500">${s.cost}/月</div>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => toggleSubActive(s.id)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
+                            s.active ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800'
+                          }`}
+                        >
+                          {s.active ? '啟用中' : '已砍除'}
+                        </button>
+                        <button
+                          onClick={() => deleteSubItem(s.id)}
+                          className="text-zinc-400 hover:text-rose-600 text-xs font-bold px-1 cursor-pointer"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* VIEW 3: ⊞ 四象限 To-Do 矩陣 */}
+        {activeTab === 'matrix' && (
+          <section className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-6 space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold text-zinc-900">
+                  艾森豪四象限任務管理矩陣 (Eisenhower Matrix)
+                </h2>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {['ALL', ...appState.todo.categories].map((c) => (
+                  <button
+                    key={c}
+                    onClick={() =>
+                      setAppState((p) => ({
+                        ...p,
+                        todo: { ...p.todo, activeCategoryFilter: c }
+                      }))
+                    }
+                    className={`px-3 py-1 rounded-xl text-xs font-semibold cursor-pointer ${
+                      appState.todo.activeCategoryFilter === c
+                        ? 'bg-zinc-900 text-white'
+                        : 'bg-white/70 text-zinc-600 border border-white'
+                    }`}
+                  >
+                    {c === 'ALL' ? '全部分類' : c}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <form
+              onSubmit={handleAddTask}
+              className="bg-white/85 p-3 rounded-2xl border border-white flex flex-wrap items-center gap-2.5"
+            >
+              <input
+                type="text"
+                value={quickTaskText}
+                onChange={(e) => setQuickTaskText(e.target.value)}
+                placeholder="輸入新任務名稱..."
+                className="flex-1 min-w-[220px] bg-zinc-100 px-3.5 py-2 rounded-xl text-xs text-zinc-900 border border-zinc-200 focus:outline-none select-text"
+              />
+              <select
+                value={quickTaskQuad}
+                onChange={(e) => setQuickTaskQuad(e.target.value)}
+                className="bg-zinc-100 text-zinc-800 text-xs font-semibold px-3 py-2 rounded-xl border border-zinc-200"
+              >
+                <option value="IE">🔥 I&E 重要且緊急</option>
+                <option value="INE">🎯 I&NE 重要不緊急</option>
+                <option value="NIE">⚡ NI&E 不重要但緊急</option>
+                <option value="NINE">📥 NI&NE 收件匣/雜事</option>
+              </select>
+              <select
+                value={quickTaskCat}
+                onChange={(e) => setQuickTaskCat(e.target.value)}
+                className="bg-zinc-100 text-zinc-800 text-xs font-semibold px-3 py-2 rounded-xl border border-zinc-200"
+              >
+                {appState.todo.categories.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="submit"
+                className="px-5 py-2 rounded-xl bg-gradient-to-b from-[#3a3a3c] to-[#1d1d1f] text-white text-xs font-semibold cursor-pointer"
+              >
+                ＋ 加入四象限
+              </button>
+            </form>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              {[
+                { key: 'IE', title: 'I&E ‧ 重要且緊急', borderCls: 'border-t-4 border-t-rose-500', titleCls: 'text-rose-700' },
+                { key: 'INE', title: 'I&NE ‧ 重要但不緊急', borderCls: 'border-t-4 border-t-blue-600', titleCls: 'text-blue-700' },
+                { key: 'NIE', title: 'NI&E ‧ 不重要但緊急', borderCls: 'border-t-4 border-t-amber-500', titleCls: 'text-amber-700' },
+                { key: 'NINE', title: 'NI&NE ‧ 不重要且不緊急', borderCls: 'border-t-4 border-t-zinc-400', titleCls: 'text-zinc-700' }
+              ].map((q) => {
+                const activeCat = appState.todo.activeCategoryFilter;
+                const tasksInQuad = appState.todo.tasks.filter(
+                  (t) => t.quad === q.key && (activeCat === 'ALL' || t.cat === activeCat)
+                );
+                return (
+                  <div
+                    key={q.key}
+                    className={`bg-white/65 border border-white rounded-2xl p-5 ${q.borderCls} min-h-[260px] flex flex-col`}
+                  >
+                    <div className="mb-3">
+                      <h3 className={`text-sm font-bold ${q.titleCls}`}>{q.title}</h3>
+                    </div>
+                    <div className="flex-1 space-y-2">
+                      {tasksInQuad.length === 0 ? (
+                        <p className="text-xs text-zinc-400 py-6 text-center">此象限目前沒有任務</p>
+                      ) : (
+                        tasksInQuad.map((t) => (
+                          <div
+                            key={t.id}
+                            className="bg-white/90 p-3 rounded-xl border border-zinc-200/80 flex items-center justify-between gap-2"
+                          >
+                            <div
+                              onClick={() => toggleTaskDone(t.id)}
+                              className="flex items-center gap-2.5 cursor-pointer flex-1"
+                            >
+                              {t.done ? (
+                                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                              ) : (
+                                <Circle className="w-4 h-4 text-zinc-400 shrink-0" />
+                              )}
+                              <span
+                                className={`text-xs ${
+                                  t.done ? 'line-through text-zinc-400' : 'text-zinc-900 font-semibold'
+                                }`}
+                              >
+                                {t.text}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-zinc-100 text-zinc-700">
+                                {t.cat}
+                              </span>
+                              <select
+                                value={t.quad}
+                                onChange={(e) => changeTaskQuad(t.id, e.target.value)}
+                                className="bg-zinc-100 text-[10px] font-bold text-zinc-700 px-1.5 py-1 rounded border border-zinc-200"
+                              >
+                                <option value="IE">I&E</option>
+                                <option value="INE">I&NE</option>
+                                <option value="NIE">NI&E</option>
+                                <option value="NINE">NI&NE</option>
+                              </select>
+                              <button
+                                onClick={() => deleteTaskItem(t.id)}
+                                className="text-zinc-400 hover:text-rose-600 text-xs font-bold px-1 cursor-pointer"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+      </main>
+
+      {/* MODALS */}
+      {showAddAccModal && (
+        <div
+          onClick={() => setShowAddAccModal(false)}
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+        >
+          <form
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={handleAddAccount}
+            className="bg-white/95 backdrop-blur-2xl border border-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-zinc-900">新增財務帳戶或負債項目</h3>
+              <button
+                type="button"
+                onClick={() => setShowAddAccModal(false)}
+                className="w-7 h-7 rounded-full bg-zinc-200 text-zinc-700 text-xs font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-zinc-600 block mb-1">帳戶類別</label>
+                <select
+                  value={accCatInput}
+                  onChange={(e) => setAccCatInput(e.target.value)}
+                  className="w-full bg-zinc-100 px-3 py-2 rounded-xl text-xs font-semibold text-zinc-900 border border-zinc-200"
+                >
+                  <option value="DEBT">🔥 負債項目 (Debt)</option>
+                  <option value="SAVINGS">🌱 儲蓄帳戶 (Savings)</option>
+                  <option value="CURRENTS">💧 日常活存 (Currents)</option>
+                  <option value="INVESTMENT">📈 投資帳戶 (Investment)</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-zinc-600 block mb-1">帳戶 / 項目名稱</label>
+                <input
+                  type="text"
+                  value={accNameInput}
+                  onChange={(e) => setAccNameInput(e.target.value)}
+                  placeholder="例如：信用卡分期 / 活存"
+                  className="w-full bg-zinc-100 px-3 py-2 rounded-xl text-xs text-zinc-900 border border-zinc-200 select-text"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-zinc-600 block mb-1">當前餘額 / 欠款 ($)</label>
+                <input
+                  type="number"
+                  value={accBalanceInput}
+                  onChange={(e) => setAccBalanceInput(e.target.value)}
+                  placeholder="金額"
+                  className="w-full bg-zinc-100 px-3 py-2 rounded-xl text-xs font-bold text-zinc-900 border border-zinc-200 select-text"
+                />
+              </div>
+              {accCatInput === 'DEBT' && (
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="text-xs font-semibold text-zinc-600 block mb-1">初始總欠款</label>
+                    <input
+                      type="number"
+                      value={accInitDebtInput}
+                      onChange={(e) => setAccInitDebtInput(e.target.value)}
+                      className="w-full bg-zinc-100 px-3 py-2 rounded-xl text-xs text-zinc-900 border border-zinc-200 select-text"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-zinc-600 block mb-1">年利率 APR (%)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={accAprInput}
+                      onChange={(e) => setAccAprInput(e.target.value)}
+                      className="w-full bg-zinc-100 px-3 py-2 rounded-xl text-xs text-zinc-900 border border-zinc-200 select-text"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowAddAccModal(false)}
+                className="px-4 py-2 rounded-xl bg-zinc-200 text-xs font-semibold text-zinc-700 cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 rounded-xl bg-gradient-to-b from-[#3a3a3c] to-[#1d1d1f] text-white text-xs font-semibold cursor-pointer"
+              >
+                確認新增
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {showHealthModal && (
+        <div
+          onClick={() => setShowHealthModal(false)}
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+        >
+          <form
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={handleSaveHealthModal}
+            className="bg-white/95 backdrop-blur-2xl border border-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-zinc-900">更新身體機能數據</h3>
+              <button
+                type="button"
+                onClick={() => setShowHealthModal(false)}
+                className="w-7 h-7 rounded-full bg-zinc-200 text-zinc-700 text-xs font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-zinc-600 block mb-1">體重 (kg)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={weightInput}
+                  onChange={(e) => setWeightInput(e.target.value)}
+                  className="w-full bg-zinc-100 px-3 py-2 rounded-xl text-sm font-bold text-zinc-900 border border-zinc-200 select-text"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-zinc-600 block mb-1">體脂率 (%)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={bfInput}
+                  onChange={(e) => setBfInput(e.target.value)}
+                  className="w-full bg-zinc-100 px-3 py-2 rounded-xl text-sm font-bold text-zinc-900 border border-zinc-200 select-text"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-zinc-600 block mb-1">睡眠時數 (hrs)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={sleepInput}
+                  onChange={(e) => setSleepInput(e.target.value)}
+                  className="w-full bg-zinc-100 px-3 py-2 rounded-xl text-sm font-bold text-zinc-900 border border-zinc-200 select-text"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowHealthModal(false)}
+                className="px-4 py-2 rounded-xl bg-zinc-200 text-xs font-semibold text-zinc-700 cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 rounded-xl bg-gradient-to-b from-[#3a3a3c] to-[#1d1d1f] text-white text-xs font-semibold cursor-pointer"
+              >
+                儲存更新
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {showCloudModal && (
+        <div
+          onClick={() => setShowCloudModal(false)}
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white/95 backdrop-blur-2xl border border-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-zinc-900 text-white flex items-center justify-center">
+                  <Cloud className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-zinc-900">
+                    Google Sheets 雙向雲端同步中心
+                  </h3>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCloudModal(false)}
+                className="w-7 h-7 rounded-full bg-zinc-200 text-zinc-700 text-xs font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex items-center gap-1.5 bg-zinc-200/75 p-1 rounded-xl">
+              <button
+                onClick={() => setCloudModalTab('sync')}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  cloudModalTab === 'sync' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-600'
+                }`}
+              >
+                ☁️ 雲端連線設定
+              </button>
+              <button
+                onClick={() => setCloudModalTab('gas_code')}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  cloudModalTab === 'gas_code' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-600'
+                }`}
+              >
+                📋 複製 Apps Script 代碼
+              </button>
+              <button
+                onClick={() => setCloudModalTab('pwa_guide')}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  cloudModalTab === 'pwa_guide' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-600'
+                }`}
+              >
+                📱 iPhone PWA 指南
+              </button>
+            </div>
+
+            {cloudModalTab === 'sync' && (
+              <div className="space-y-4 overflow-y-auto pr-1">
+                <div>
+                  <label className="text-xs font-bold text-zinc-700 block mb-1">
+                    Google Apps Script Web App URL
+                  </label>
+                  <input
+                    type="url"
+                    value={cloudUrlInput}
+                    onChange={(e) => setCloudUrlInput(e.target.value)}
+                    placeholder="https://script.google.com/macros/s/.../exec"
+                    className="w-full bg-zinc-100 px-3.5 py-2.5 rounded-xl text-xs font-mono text-zinc-900 border border-zinc-300 focus:outline-none select-text"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    onClick={() => pushToGoogleSheets(cloudUrlInput, false)}
+                    disabled={isSyncingCloud}
+                    className="py-2.5 px-4 rounded-xl bg-zinc-900 text-white text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    ⬆ 推送至雲端
+                  </button>
+                  <button
+                    onClick={() => pullFromGoogleSheets(cloudUrlInput, false)}
+                    disabled={isSyncingCloud}
+                    className="py-2.5 px-4 rounded-xl bg-zinc-200 hover:bg-zinc-300 text-zinc-900 text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    ⬇ 從雲端拉取
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {cloudModalTab === 'gas_code' && (
+              <div className="space-y-3 overflow-y-auto pr-1 flex-1">
+                <div className="flex items-center justify-between bg-emerald-50 border border-emerald-200 px-3.5 py-2.5 rounded-2xl">
+                  <span className="text-xs text-emerald-900">
+                    建立試算表並貼上以下代碼，部署為任何人可存取的網頁應用程式：
+                  </span>
+                  <button
+                    onClick={handleCopyGasScript}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shrink-0 cursor-pointer"
+                  >
+                    <Copy className="w-3.5 h-3.5" /> {copiedGasCode ? '✓ 已複製' : '複製代碼'}
+                  </button>
+                </div>
+                <pre className="bg-zinc-900 text-zinc-100 p-4 rounded-2xl text-[11px] font-mono overflow-x-auto max-h-[250px] leading-relaxed select-text">
+                  {GAS_BACKEND_SCRIPT}
+                </pre>
+              </div>
+            )}
+
+            {cloudModalTab === 'pwa_guide' && (
+              <div className="space-y-3 overflow-y-auto pr-1 text-xs text-zinc-700 leading-relaxed">
+                <div className="bg-white p-3.5 rounded-2xl border border-zinc-200 space-y-1.5">
+                  <div className="font-bold text-zinc-900">1. 電腦端：固定分頁 (Pin Tab)</div>
+                  <p>在瀏覽器開啟網頁後按右鍵選擇「固定分頁」，作為每天開機常駐的主頁。</p>
+                </div>
+                <div className="bg-white p-3.5 rounded-2xl border border-zinc-200 space-y-1.5">
+                  <div className="font-bold text-zinc-900">2. iPhone 端：加入主畫面</div>
+                  <p>在 iPhone Safari 點擊分享按鈕，選擇「加入主畫面」，即可享有全螢幕 App 體驗。</p>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-3 border-t border-zinc-200">
+              <span className="text-[11px] text-zinc-500">網址會自動保存在本機瀏覽器</span>
+              <button
+                onClick={() => {
+                  const trimmed = cloudUrlInput.trim();
+                  localStorage.setItem(GAS_URL_KEY, trimmed);
+                  setAppState((prev) => ({
+                    ...prev,
+                    cloudConfig: { ...prev.cloudConfig, googleScriptUrl: trimmed }
+                  }));
+                  setCloudStatus(trimmed ? 'connected' : 'local');
+                  setShowCloudModal(false);
+                  triggerToast('✓ 已儲存 Google Cloud 同步設定');
+                }}
+                className="px-5 py-2 rounded-xl bg-zinc-900 text-white text-xs font-semibold cursor-pointer"
+              >
+                儲存並關閉
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
