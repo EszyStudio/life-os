@@ -35,7 +35,7 @@
     const { useState, useEffect, useMemo, useRef } = React;
 
     // =====================================================
-    // 內嵌輕量 SVG 圖標庫（對應原本 lucide-react，無須外部打包工具）
+    // 內嵌輕量 SVG 圖標庫
     // =====================================================
     const IconWrapper = ({ children, className = "w-4 h-4", ...props }) => (
       <svg
@@ -133,7 +133,7 @@
     );
 
     // =====================================================
-    // 儲存金鑰與預設狀態 (LIFE OS v7.0 Pro Edition)
+    // 儲存金鑰與預設狀態 (保持 LIFE_OS_PRO_V7 確保資料不流失)
     // =====================================================
     const STORAGE_KEY = 'LIFE_OS_PRO_V7';
     const GAS_URL_KEY = 'LIFE_OS_GAS_URL';
@@ -367,7 +367,8 @@ function doPost(e) {
           { id: 'sub-1', name: 'Click Click (TickTick 滴答清單)', cost: 28, billingDay: '每月 12 號', active: false },
           { id: 'sub-2', name: 'YouTube Premium', cost: 78, billingDay: '每月 5 號', active: true },
           { id: 'sub-3', name: 'Google AI Pro 訂閱', cost: 156, billingDay: '每月 18 號', active: true },
-          { id: 'sub-4', name: '健身房會籍 (Gym)', cost: 350, billingDay: '每月 1 號', active: true }
+          { id: 'sub-4', name: '健身房會籍 (Gym)', cost: 350, billingDay: '每月 1 號', active: true },
+          { id: 'sub-5', name: '少看的串流娛樂平台', cost: 95, billingDay: '每月 22 號', active: false }
         ]
       },
       cloudConfig: {
@@ -406,12 +407,17 @@ function doPost(e) {
                 ...(parsed.mindset || {}),
                 dailyReview: { ...DEFAULT_STATE.mindset.dailyReview, ...(parsed.mindset?.dailyReview || {}) }
               },
-              todo: { ...DEFAULT_STATE.todo, ...(parsed.todo || {}) },
+              todo: {
+                ...DEFAULT_STATE.todo,
+                ...(parsed.todo || {}),
+                categories: parsed.todo?.categories?.length ? parsed.todo.categories : DEFAULT_STATE.todo.categories
+              },
               health: { ...DEFAULT_STATE.health, ...(parsed.health || {}) },
               finance: {
                 ...DEFAULT_STATE.finance,
                 ...(parsed.finance || {}),
-                budgetsByPeriod: { ...DEFAULT_STATE.finance.budgetsByPeriod, ...(parsed.finance?.budgetsByPeriod || {}) }
+                budgetsByPeriod: { ...DEFAULT_STATE.finance.budgetsByPeriod, ...(parsed.finance?.budgetsByPeriod || {}) },
+                subscriptions: parsed.finance?.subscriptions?.length ? parsed.finance.subscriptions : DEFAULT_STATE.finance.subscriptions
               },
               cloudConfig: {
                 ...DEFAULT_STATE.cloudConfig,
@@ -449,7 +455,7 @@ function doPost(e) {
       }, []);
 
       const [activeTab, setActiveTab] = useState('command');
-      const [financeSubTab, setFinanceSubTab] = useState('overview');
+      const [financeSubTab, setFinanceSubTab] = useState('overview'); // overview | budgets | goals | subscriptions | resources
       const [toastMsg, setToastMsg] = useState(null);
       const triggerToast = (msg) => {
         setToastMsg(msg);
@@ -597,6 +603,9 @@ function doPost(e) {
         triggerToast(`✓ 已歸檔 ${reviewDate} (${timeStr}) 複盤紀錄！`);
       };
 
+      // =====================================================
+      // 修訂 3：四象限 To-Do 支援分類 (Category) 與新增分類
+      // =====================================================
       const [quickTaskText, setQuickTaskText] = useState('');
       const [quickTaskQuad, setQuickTaskQuad] = useState('IE');
       const [quickTaskCat, setQuickTaskCat] = useState('#財務清債');
@@ -612,7 +621,7 @@ function doPost(e) {
           id: `t-${Date.now()}`,
           text: quickTaskText.trim(),
           quad: quickTaskQuad,
-          cat: quickTaskCat,
+          cat: quickTaskCat || (appState.todo.categories?.[0] || '#日常要務'),
           done: false,
           dueDate: quickTaskDate || '',
           dueTime: quickTaskTime || '',
@@ -624,7 +633,26 @@ function doPost(e) {
           todo: { ...prev.todo, tasks: [newTask, ...prev.todo.tasks] }
         }));
         setQuickTaskText('');
-        triggerToast('✓ 已新增四象限任務');
+        triggerToast(`✓ 已新增任務至 [${newTask.cat}]`);
+      };
+
+      const handleAddNewTaskCategory = () => {
+        const raw = window.prompt('請輸入新任務分類名稱（例如：#工作專案 或 #AIGC創作）：', '#');
+        if (!raw || !raw.trim()) return;
+        const clean = raw.trim().startsWith('#') ? raw.trim() : `#${raw.trim()}`;
+        setAppState((prev) => {
+          const exists = (prev.todo.categories || []).includes(clean);
+          if (exists) return prev;
+          return {
+            ...prev,
+            todo: {
+              ...prev.todo,
+              categories: [...(prev.todo.categories || []), clean]
+            }
+          };
+        });
+        setQuickTaskCat(clean);
+        triggerToast(`✓ 已新增任務分類：${clean}`);
       };
 
       const toggleTaskDone = (taskId) => {
@@ -704,6 +732,9 @@ function doPost(e) {
         }));
       };
 
+      // =====================================================
+      // 身體機能 (BODY)
+      // =====================================================
       const [activeBodyChartMetric, setActiveBodyChartMetric] = useState('weightKg');
       const [showHealthModal, setShowHealthModal] = useState(false);
       const [healthDateInput, setHealthDateInput] = useState(getTodayIso());
@@ -760,6 +791,9 @@ function doPost(e) {
         });
       };
 
+      // =====================================================
+      // 修訂 1 & 2：財務區帳戶修改/刪除 + 獨立每月訂閱生死簿
+      // =====================================================
       const [budgetPeriodTab, setBudgetPeriodTab] = useState('MONTHLY');
       const [newBudgetCat, setNewBudgetCat] = useState('飲食');
       const [newBudgetLimit, setNewBudgetLimit] = useState('');
@@ -774,12 +808,110 @@ function doPost(e) {
       const [resCostInput, setResCostInput] = useState('');
       const [resNoteInput, setResNoteInput] = useState('');
 
+      // 訂閱生死簿 State
+      const [subNameInput, setSubNameInput] = useState('');
+      const [subCostInput, setSubCostInput] = useState('');
+      const [subDayInput, setSubDayInput] = useState('');
+
       const [showAddAccModal, setShowAddAccModal] = useState(false);
       const [accCatInput, setAccCatInput] = useState('DEBT');
       const [accNameInput, setAccNameInput] = useState('');
       const [accBalanceInput, setAccBalanceInput] = useState('');
       const [accInitDebtInput, setAccInitDebtInput] = useState('');
       const [accAprInput, setAccAprInput] = useState('');
+
+      // 帳戶修改與刪除輔助函式
+      const updateAccountField = (accId, field, val) => {
+        setAppState((prev) => ({
+          ...prev,
+          finance: {
+            ...prev.finance,
+            accounts: prev.finance.accounts.map((a) =>
+              a.id === accId ? { ...a, [field]: val } : a
+            )
+          }
+        }));
+      };
+
+      const handleCustomAdjustAccount = (acc) => {
+        const raw = window.prompt(`請輸入對「${acc.name}」要增減的金額（例如輸入 +1200 或 -800）：`, '+1000');
+        if (raw === null) return;
+        const delta = Number(raw);
+        if (isNaN(delta)) return;
+        updateAccountField(acc.id, 'balance', Math.max(0, (Number(acc.balance) || 0) + delta));
+        triggerToast(`✓ 已調整 ${acc.name} 金額 (${delta >= 0 ? '+' : ''}${delta})`);
+      };
+
+      const handleDeleteAccount = (acc) => {
+        if (!window.confirm(`確定要刪除帳戶「${acc.name}」嗎？`)) return;
+        setAppState((prev) => ({
+          ...prev,
+          finance: {
+            ...prev.finance,
+            accounts: prev.finance.accounts.filter((a) => a.id !== acc.id)
+          }
+        }));
+        triggerToast(`🗑️ 已刪除帳戶：${acc.name}`);
+      };
+
+      // 每月訂閱生死簿 CRUD 函式
+      const handleAddSubscription = (e) => {
+        e.preventDefault();
+        if (!subNameInput.trim()) return;
+        const newSub = {
+          id: `sub-${Date.now()}`,
+          name: subNameInput.trim(),
+          cost: Math.max(0, Number(subCostInput) || 0),
+          billingDay: subDayInput.trim() || '每月固定',
+          active: true
+        };
+        setAppState((prev) => ({
+          ...prev,
+          finance: {
+            ...prev.finance,
+            subscriptions: [...(prev.finance.subscriptions || []), newSub]
+          }
+        }));
+        setSubNameInput('');
+        setSubCostInput('');
+        setSubDayInput('');
+        triggerToast(`✓ 已新增每月訂閱項目：${newSub.name}`);
+      };
+
+      const toggleSubscriptionActive = (subId) => {
+        setAppState((prev) => ({
+          ...prev,
+          finance: {
+            ...prev.finance,
+            subscriptions: (prev.finance.subscriptions || []).map((s) =>
+              s.id === subId ? { ...s, active: !s.active } : s
+            )
+          }
+        }));
+      };
+
+      const updateSubscriptionField = (subId, field, value) => {
+        setAppState((prev) => ({
+          ...prev,
+          finance: {
+            ...prev.finance,
+            subscriptions: (prev.finance.subscriptions || []).map((s) =>
+              s.id === subId ? { ...s, [field]: value } : s
+            )
+          }
+        }));
+      };
+
+      const deleteSubscriptionItem = (subId) => {
+        setAppState((prev) => ({
+          ...prev,
+          finance: {
+            ...prev.finance,
+            subscriptions: (prev.finance.subscriptions || []).filter((s) => s.id !== subId)
+          }
+        }));
+        triggerToast('🗑️ 已刪除訂閱項目');
+      };
 
       const [showCloudModal, setShowCloudModal] = useState(false);
       const [cloudModalTab, setCloudModalTab] = useState('sync');
@@ -867,6 +999,14 @@ function doPost(e) {
           return { ...c, amount, pct };
         }).filter((s) => s.amount > 0);
 
+        let activeSubMonthly = 0;
+        let savedSubMonthly = 0;
+        (appState.finance.subscriptions || []).forEach((s) => {
+          const cost = Number(s.cost) || 0;
+          if (s.active) activeSubMonthly += cost;
+          else savedSubMonthly += cost;
+        });
+
         const debtPaidPct = initialDebtTotal > 0
           ? Math.min(100, Math.max(0, Math.round(((initialDebtTotal - debt) / initialDebtTotal) * 100)))
           : 100;
@@ -875,7 +1015,10 @@ function doPost(e) {
         return {
           savings, currents, debt, initialDebtTotal, investment,
           totalAssets, netWorth, totalExpenses, categoryTotals,
-          pieSlices, debtPaidPct, savingsGoalPct
+          pieSlices, debtPaidPct, savingsGoalPct,
+          activeSubMonthly,
+          savedSubMonthly,
+          savedSubYearly: savedSubMonthly * 12
         };
       }, [appState.finance]);
 
@@ -1171,7 +1314,7 @@ function doPost(e) {
                 <div className="flex items-center gap-2">
                   <h1 className="font-bold text-base tracking-tight text-zinc-900">LIFE OS</h1>
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-zinc-900 text-emerald-400 font-mono">
-                    v7.0 PRO
+                    v7.2 PRO
                   </span>
                 </div>
                 <p className="text-[11px] text-zinc-500">{dateInfo.dateStr}</p>
@@ -1193,7 +1336,7 @@ function doPost(e) {
                   activeTab === 'finance' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-600 hover:text-zinc-900'
                 }`}
               >
-                <span>💰</span> 財務・預算・目標・網課庫
+                <span>💰</span> 財務・預算・訂閱・目標・網課
               </button>
               <button
                 onClick={() => setActiveTab('matrix')}
@@ -1201,7 +1344,7 @@ function doPost(e) {
                   activeTab === 'matrix' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-600 hover:text-zinc-900'
                 }`}
               >
-                <span>⊞</span> 四象限 To-Do & 日曆
+                <span>⊞</span> 四象限 To-Do & 分類
               </button>
             </nav>
 
@@ -1266,7 +1409,9 @@ function doPost(e) {
           </header>
 
           <main className="max-w-[1600px] mx-auto">
-            {/* VIEW 1: 主戰情室 */}
+            {/* =========================================================
+                VIEW 1: 主戰情室
+               ========================================================= */}
             {activeTab === 'command' && (
               <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* 象限 1 (左上): 每日心智複盤與時間塊調度 */}
@@ -1546,12 +1691,12 @@ function doPost(e) {
                   </div>
                 </div>
 
-                {/* 象限 2 (右上): 小日曆連動 + 四象限 To-Do */}
+                {/* 象限 2 (右上): 小日曆連動 + 四象限 To-Do (含分類選擇與篩選) */}
                 <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-5 flex flex-col min-h-[560px]">
-                  <div className="flex items-center justify-between mb-2.5">
+                  <div className="flex items-center justify-between mb-2">
                     <div>
                       <h2 className="text-base font-bold text-zinc-900">小日曆連動 ＆ 四象限任務矩陣</h2>
-                      <p className="text-xs text-zinc-500">點擊日曆日期可篩選當日任務；點擊任務可展開子任務 (Sub-task) 與備註</p>
+                      <p className="text-xs text-zinc-500">支援分類標籤、日曆篩選、子任務 (Sub-task) 與備註</p>
                     </div>
                     <button
                       onClick={() => setActiveTab('matrix')}
@@ -1561,7 +1706,35 @@ function doPost(e) {
                     </button>
                   </div>
 
-                  {/* 快速新增任務列 */}
+                  {/* 分類標籤快速篩選列 */}
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-2 mb-1">
+                    {['ALL', ...(appState.todo.categories || [])].map((cat) => {
+                      const activeCat = appState.todo.activeCategoryFilter || 'ALL';
+                      return (
+                        <button
+                          key={cat}
+                          onClick={() =>
+                            setAppState((p) => ({ ...p, todo: { ...p.todo, activeCategoryFilter: cat } }))
+                          }
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold whitespace-nowrap cursor-pointer transition ${
+                            activeCat === cat
+                              ? 'bg-zinc-900 text-white shadow-sm'
+                              : 'bg-white/70 text-zinc-600 hover:bg-white'
+                          }`}
+                        >
+                          {cat === 'ALL' ? '全部分類' : cat}
+                        </button>
+                      );
+                    })}
+                    <button
+                      onClick={handleAddNewTaskCategory}
+                      className="px-2 py-1 rounded-lg bg-zinc-200/80 hover:bg-zinc-300 text-zinc-700 text-[11px] font-bold whitespace-nowrap cursor-pointer"
+                    >
+                      ＋分類
+                    </button>
+                  </div>
+
+                  {/* 快速新增任務列 (加入分類選擇器) */}
                   <form
                     onSubmit={handleAddTask}
                     className="flex flex-wrap items-center gap-1.5 mb-3 bg-white/85 p-2 rounded-2xl border border-white"
@@ -1571,18 +1744,21 @@ function doPost(e) {
                       value={quickTaskText}
                       onChange={(e) => setQuickTaskText(e.target.value)}
                       placeholder="輸入新任務..."
-                      className="flex-1 min-w-[140px] bg-transparent px-2.5 py-1 text-xs text-zinc-800 focus:outline-none select-text"
+                      className="flex-1 min-w-[120px] bg-transparent px-2 py-1 text-xs text-zinc-800 focus:outline-none select-text"
                     />
+                    <select
+                      value={quickTaskCat}
+                      onChange={(e) => setQuickTaskCat(e.target.value)}
+                      className="bg-zinc-100 text-zinc-700 text-[11px] font-semibold px-2 py-1 rounded-lg border border-zinc-200"
+                    >
+                      {(appState.todo.categories || []).map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
                     <input
                       type="date"
                       value={quickTaskDate}
                       onChange={(e) => setQuickTaskDate(e.target.value)}
-                      className="bg-zinc-100 text-zinc-700 text-[11px] font-mono px-2 py-1 rounded-lg border border-zinc-200"
-                    />
-                    <input
-                      type="time"
-                      value={quickTaskTime}
-                      onChange={(e) => setQuickTaskTime(e.target.value)}
                       className="bg-zinc-100 text-zinc-700 text-[11px] font-mono px-1.5 py-1 rounded-lg border border-zinc-200"
                     />
                     <select
@@ -1707,8 +1883,12 @@ function doPost(e) {
                         { key: 'NINE', title: 'NI&NE 收件匣', borderCls: 'border-l-4 border-l-zinc-400', textCls: 'text-zinc-600' }
                       ].map((q) => {
                         const selDate = appState.todo.selectedCalendarDate;
+                        const activeCat = appState.todo.activeCategoryFilter || 'ALL';
                         const qTasks = (appState.todo.tasks || []).filter(
-                          (t) => t.quad === q.key && (!selDate || t.dueDate === selDate)
+                          (t) =>
+                            t.quad === q.key &&
+                            (!selDate || t.dueDate === selDate) &&
+                            (activeCat === 'ALL' || t.cat === activeCat)
                         );
                         return (
                           <div
@@ -1753,6 +1933,11 @@ function doPost(e) {
                                               {t.text}
                                             </div>
                                             <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                                              {t.cat && (
+                                                <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-zinc-200/80 text-zinc-700">
+                                                  {t.cat}
+                                                </span>
+                                              )}
                                               {t.dueDate && (
                                                 <span className="text-[9px] font-mono text-zinc-500">
                                                   📅 {t.dueDate.slice(5)} {t.dueTime || ''}
@@ -1777,6 +1962,19 @@ function doPost(e) {
 
                                       {isExp && (
                                         <div className="pt-1.5 border-t border-zinc-100 space-y-1.5 text-[11px]">
+                                          {/* 展開時亦可直接切換分類 */}
+                                          <div className="flex items-center justify-between gap-1">
+                                            <span className="text-[10px] text-zinc-500">分類：</span>
+                                            <select
+                                              value={t.cat || '#日常要務'}
+                                              onChange={(e) => updateTaskField(t.id, 'cat', e.target.value)}
+                                              className="bg-zinc-100 text-[10px] font-bold text-zinc-800 px-1.5 py-0.5 rounded border border-zinc-200"
+                                            >
+                                              {(appState.todo.categories || []).map((c) => (
+                                                <option key={c} value={c}>{c}</option>
+                                              ))}
+                                            </select>
+                                          </div>
                                           <textarea
                                             rows={2}
                                             value={t.note || ''}
@@ -1996,7 +2194,7 @@ function doPost(e) {
                       onClick={() => setActiveTab('finance')}
                       className="px-3 py-1.5 rounded-xl bg-zinc-900 text-white text-xs font-semibold shadow-sm cursor-pointer"
                     >
-                      預算・目標・網課庫 ➔
+                      帳戶・訂閱・預算・目標 ➔
                     </button>
                   </div>
 
@@ -2126,13 +2324,16 @@ function doPost(e) {
               </section>
             )}
 
-            {/* VIEW 2: 財務監控儀表板 (含預算表、目標計算器、網課庫) */}
+            {/* =========================================================
+                VIEW 2: 財務監控儀表板 (含帳戶修改刪除、訂閱生死簿、預算表、目標計算器、網課庫)
+               ========================================================= */}
             {activeTab === 'finance' && (
               <section className="space-y-6">
                 <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-5 flex flex-wrap items-center justify-between gap-4">
                   <div className="flex flex-wrap items-center gap-1.5 bg-zinc-200/75 p-1.5 rounded-2xl">
                     {[
-                      { id: 'overview', label: '🏦 帳戶・圓餅圖・收支流水' },
+                      { id: 'overview', label: '🏦 帳戶增刪修改・收支流水' },
+                      { id: 'subscriptions', label: '🔄 每月訂閱生死簿 (可加可減)' },
                       { id: 'budgets', label: '📊 日/周/月/季/年 分類預算表' },
                       { id: 'goals', label: '🎯 個人財務目標計算器 (買車/買樓)' },
                       { id: 'resources', label: '📚 已購網課・資源・服務價值庫' }
@@ -2140,7 +2341,7 @@ function doPost(e) {
                       <button
                         key={t.id}
                         onClick={() => setFinanceSubTab(t.id)}
-                        className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+                        className={`px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
                           financeSubTab === t.id ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-600 hover:text-zinc-900'
                         }`}
                       >
@@ -2165,77 +2366,124 @@ function doPost(e) {
                   </div>
                 </div>
 
+                {/* 修訂 1：四大帳戶完整修改（名稱、餘額、APR、自訂加減）與刪除 */}
                 {financeSubTab === 'overview' && (
                   <div className="space-y-6">
                     <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-6">
-                      <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-base font-bold text-zinc-900">四大帳戶與負債明細管理</h3>
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                        <div>
+                          <h3 className="text-base font-bold text-zinc-900">四大帳戶與負債明細管理 (支援直接編輯名稱、修改餘額與刪除)</h3>
+                          <p className="text-xs text-zinc-500">點擊帳戶名稱或金額框可直接修改；亦可點擊 -500 / +500 / ±自訂 或右上角 ✕ 刪除帳戶</p>
+                        </div>
                         <button
                           onClick={() => setShowAddAccModal(true)}
                           className="px-4 py-2 rounded-xl bg-zinc-900 text-white text-xs font-semibold cursor-pointer"
                         >
-                          ＋ 新增帳戶 / 負債
+                          ＋ 新增帳戶 / 負債項目
                         </button>
                       </div>
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                         {[
-                          { key: 'DEBT', title: '🔥 負債項目 (Debt)', borderCls: 'border-t-4 border-t-rose-500' },
-                          { key: 'SAVINGS', title: '🌱 儲蓄帳戶 (Savings)', borderCls: 'border-t-4 border-t-emerald-500' },
-                          { key: 'CURRENTS', title: '💧 日常活存 (Currents)', borderCls: 'border-t-4 border-t-blue-500' },
-                          { key: 'INVESTMENT', title: '📈 投資部位 (Investment)', borderCls: 'border-t-4 border-t-indigo-500' }
+                          { key: 'DEBT', title: '🔥 負債項目 (Debt)', borderCls: 'border-t-4 border-t-rose-500', badgeCls: 'bg-rose-100 text-rose-800' },
+                          { key: 'SAVINGS', title: '🌱 儲蓄帳戶 (Savings)', borderCls: 'border-t-4 border-t-emerald-500', badgeCls: 'bg-emerald-100 text-emerald-800' },
+                          { key: 'CURRENTS', title: '💧 日常活存 (Currents)', borderCls: 'border-t-4 border-t-blue-500', badgeCls: 'bg-blue-100 text-blue-800' },
+                          { key: 'INVESTMENT', title: '📈 投資部位 (Investment)', borderCls: 'border-t-4 border-t-indigo-500', badgeCls: 'bg-indigo-100 text-indigo-800' }
                         ].map((cat) => {
                           const items = appState.finance.accounts.filter((a) => a.category === cat.key);
+                          const catTotal = items.reduce((s, a) => s + (Number(a.balance) || 0), 0);
                           return (
                             <div key={cat.key} className={`bg-white/70 border border-white rounded-2xl p-4 ${cat.borderCls}`}>
-                              <div className="font-bold text-sm text-zinc-900 mb-2.5">{cat.title}</div>
-                              <div className="space-y-2">
-                                {items.map((acc) => (
-                                  <div
-                                    key={acc.id}
-                                    className="bg-white/90 rounded-xl p-3 border border-zinc-200/80 flex items-center justify-between gap-2"
-                                  >
-                                    <div>
-                                      <div className="text-xs font-bold text-zinc-900">{acc.name}</div>
-                                      <div className="text-sm font-mono font-extrabold text-zinc-800 mt-0.5">
-                                        {formatCurrency(acc.balance)}
+                              <div className="flex items-center justify-between mb-3">
+                                <span className="font-bold text-sm text-zinc-900">{cat.title}</span>
+                                <span className={`text-xs font-mono font-bold px-2.5 py-0.5 rounded-lg ${cat.badgeCls}`}>
+                                  {formatCurrency(catTotal)}
+                                </span>
+                              </div>
+                              <div className="space-y-2.5">
+                                {items.length === 0 ? (
+                                  <p className="text-xs text-zinc-400 py-2">尚無帳戶項目</p>
+                                ) : (
+                                  items.map((acc) => (
+                                    <div
+                                      key={acc.id}
+                                      className="bg-white/95 rounded-xl p-3 border border-zinc-200/80 space-y-2"
+                                    >
+                                      <div className="flex items-center justify-between gap-2">
+                                        <input
+                                          type="text"
+                                          value={acc.name}
+                                          onChange={(e) => updateAccountField(acc.id, 'name', e.target.value)}
+                                          className="flex-1 bg-transparent hover:bg-zinc-100 focus:bg-zinc-100 px-1.5 py-0.5 rounded text-xs font-bold text-zinc-900 border border-transparent focus:border-zinc-300 focus:outline-none select-text"
+                                          title="點擊直接修改帳戶名稱"
+                                        />
+                                        {acc.category === 'DEBT' && (
+                                          <div className="flex items-center gap-1 bg-rose-50 px-2 py-0.5 rounded text-[10px] font-mono text-rose-700">
+                                            <span>APR</span>
+                                            <input
+                                              type="number"
+                                              step="0.1"
+                                              value={acc.apr || 0}
+                                              onChange={(e) => updateAccountField(acc.id, 'apr', Number(e.target.value) || 0)}
+                                              className="w-10 bg-transparent font-bold text-center focus:outline-none select-text"
+                                            />
+                                            <span>%</span>
+                                          </div>
+                                        )}
+                                        <button
+                                          onClick={() => handleDeleteAccount(acc)}
+                                          className="px-1.5 py-0.5 rounded text-zinc-400 hover:text-rose-600 hover:bg-rose-50 text-xs font-bold cursor-pointer"
+                                          title="刪除此帳戶"
+                                        >
+                                          ✕
+                                        </button>
+                                      </div>
+
+                                      <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <div className="flex items-center gap-1">
+                                          <span className="text-xs font-mono text-zinc-400 font-bold">$</span>
+                                          {isMasked ? (
+                                            <span className="text-sm font-mono font-extrabold text-zinc-800">•••••</span>
+                                          ) : (
+                                            <input
+                                              type="number"
+                                              value={acc.balance}
+                                              onChange={(e) =>
+                                                updateAccountField(acc.id, 'balance', Math.max(0, Number(e.target.value) || 0))
+                                              }
+                                              className="w-28 bg-zinc-100 px-2.5 py-1 rounded-lg text-sm font-mono font-extrabold text-zinc-900 border border-zinc-300 select-text"
+                                              title="直接輸入修改當前金額"
+                                            />
+                                          )}
+                                        </div>
+
+                                        <div className="flex items-center gap-1">
+                                          <button
+                                            onClick={() =>
+                                              updateAccountField(acc.id, 'balance', Math.max(0, (Number(acc.balance) || 0) - 500))
+                                            }
+                                            className="px-2 py-1 rounded-lg bg-zinc-200 hover:bg-zinc-300 text-xs font-mono font-bold cursor-pointer"
+                                          >
+                                            -500
+                                          </button>
+                                          <button
+                                            onClick={() =>
+                                              updateAccountField(acc.id, 'balance', (Number(acc.balance) || 0) + 500)
+                                            }
+                                            className="px-2 py-1 rounded-lg bg-zinc-200 hover:bg-zinc-300 text-xs font-mono font-bold cursor-pointer"
+                                          >
+                                            +500
+                                          </button>
+                                          <button
+                                            onClick={() => handleCustomAdjustAccount(acc)}
+                                            className="px-2.5 py-1 rounded-lg bg-zinc-900 text-white text-[11px] font-semibold cursor-pointer"
+                                          >
+                                            ±自訂
+                                          </button>
+                                        </div>
                                       </div>
                                     </div>
-                                    <div className="flex items-center gap-1.5">
-                                      <button
-                                        onClick={() =>
-                                          setAppState((p) => ({
-                                            ...p,
-                                            finance: {
-                                              ...p.finance,
-                                              accounts: p.finance.accounts.map((x) =>
-                                                x.id === acc.id ? { ...x, balance: Math.max(0, x.balance - 500) } : x
-                                              )
-                                            }
-                                          }))
-                                        }
-                                        className="px-2 py-1 rounded-lg bg-zinc-200 text-xs font-mono font-bold cursor-pointer"
-                                      >
-                                        -500
-                                      </button>
-                                      <button
-                                        onClick={() =>
-                                          setAppState((p) => ({
-                                            ...p,
-                                            finance: {
-                                              ...p.finance,
-                                              accounts: p.finance.accounts.map((x) =>
-                                                x.id === acc.id ? { ...x, balance: x.balance + 500 } : x
-                                              )
-                                            }
-                                          }))
-                                        }
-                                        className="px-2 py-1 rounded-lg bg-zinc-200 text-xs font-mono font-bold cursor-pointer"
-                                      >
-                                        +500
-                                      </button>
-                                    </div>
-                                  </div>
-                                ))}
+                                  ))
+                                )}
                               </div>
                             </div>
                           );
@@ -2288,6 +2536,133 @@ function doPost(e) {
                           </div>
                         ))}
                       </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 修訂 2：獨立「每月訂閱生死簿 (Subscriptions)」 */}
+                {financeSubTab === 'subscriptions' && (
+                  <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-6 space-y-5">
+                    <div className="flex flex-wrap items-center justify-between gap-4">
+                      <div>
+                        <h3 className="text-lg font-bold text-zinc-900">🔄 每月固定訂閱生死簿 (Subscriptions Audit)</h3>
+                        <p className="text-xs text-zinc-500 mt-0.5">
+                          集中審視所有每月自動扣款的訂閱服務（可隨時加減項目、修改金額，並切換「已砍除省錢」計算每年省下的清債資金）
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-3">
+                        <div className="bg-purple-50 border border-purple-200 px-4 py-2 rounded-2xl">
+                          <span className="text-[10px] text-purple-700 font-bold block">目前啟用中月費總計</span>
+                          <span className="text-base font-mono font-extrabold text-purple-950">
+                            {formatCurrency(finTotals.activeSubMonthly)} / 月
+                          </span>
+                        </div>
+                        <div className="bg-emerald-50 border border-emerald-200 px-4 py-2 rounded-2xl">
+                          <span className="text-[10px] text-emerald-700 font-bold block">砍除不必要訂閱每年省下</span>
+                          <span className="text-base font-mono font-extrabold text-emerald-900">
+                            {formatCurrency(finTotals.savedSubYearly)} / 年
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <form
+                      onSubmit={handleAddSubscription}
+                      className="bg-white/90 p-4 rounded-2xl border border-zinc-200/80 grid grid-cols-1 sm:grid-cols-5 gap-3"
+                    >
+                      <input
+                        type="text"
+                        value={subNameInput}
+                        onChange={(e) => setSubNameInput(e.target.value)}
+                        placeholder="訂閱名稱 (如：Netflix、iCloud、Gym)"
+                        className="sm:col-span-2 bg-zinc-100 px-3 py-2 rounded-xl text-xs font-bold text-zinc-900 border border-zinc-200 select-text"
+                      />
+                      <input
+                        type="number"
+                        value={subCostInput}
+                        onChange={(e) => setSubCostInput(e.target.value)}
+                        placeholder="每月費用 ($)"
+                        className="bg-zinc-100 px-3 py-2 rounded-xl text-xs font-mono font-bold text-zinc-900 border border-zinc-200 select-text"
+                      />
+                      <input
+                        type="text"
+                        value={subDayInput}
+                        onChange={(e) => setSubDayInput(e.target.value)}
+                        placeholder="扣款日 (如：每月 15 號)"
+                        className="bg-zinc-100 px-3 py-2 rounded-xl text-xs text-zinc-900 border border-zinc-200 select-text"
+                      />
+                      <button
+                        type="submit"
+                        className="px-4 py-2 rounded-xl bg-zinc-900 text-white text-xs font-semibold cursor-pointer"
+                      >
+                        ＋ 新增訂閱項目
+                      </button>
+                    </form>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {(appState.finance.subscriptions || []).map((s) => (
+                        <div
+                          key={s.id}
+                          className={`rounded-2xl p-4 border shadow-sm flex items-center justify-between gap-3 transition ${
+                            s.active
+                              ? 'bg-white/90 border-white'
+                              : 'bg-zinc-100/70 border-zinc-200/80 opacity-75'
+                          }`}
+                        >
+                          <div className="space-y-1 flex-1 min-w-0">
+                            <input
+                              type="text"
+                              value={s.name}
+                              onChange={(e) => updateSubscriptionField(s.id, 'name', e.target.value)}
+                              className={`w-full bg-transparent text-sm font-bold focus:outline-none select-text ${
+                                s.active ? 'text-zinc-900' : 'line-through text-zinc-500'
+                              }`}
+                            />
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="text"
+                                value={s.billingDay || ''}
+                                onChange={(e) => updateSubscriptionField(s.id, 'billingDay', e.target.value)}
+                                placeholder="扣款日"
+                                className="w-24 bg-zinc-100 px-2 py-0.5 rounded text-[11px] text-zinc-600 select-text"
+                              />
+                              <div className="flex items-center gap-1">
+                                <span className="text-xs font-mono text-zinc-400">$</span>
+                                <input
+                                  type="number"
+                                  value={s.cost}
+                                  onChange={(e) =>
+                                    updateSubscriptionField(s.id, 'cost', Math.max(0, Number(e.target.value) || 0))
+                                  }
+                                  className="w-20 bg-zinc-100 px-2 py-0.5 rounded text-xs font-mono font-bold text-zinc-900 border border-zinc-200 select-text"
+                                />
+                                <span className="text-[11px] text-zinc-400">/月</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              onClick={() => toggleSubscriptionActive(s.id)}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition ${
+                                s.active
+                                  ? 'bg-purple-100 text-purple-900 hover:bg-purple-200'
+                                  : 'bg-emerald-100 text-emerald-900 hover:bg-emerald-200'
+                              }`}
+                            >
+                              {s.active ? '🟢 啟用中' : '✂️ 已砍除省錢'}
+                            </button>
+                            <button
+                              onClick={() => deleteSubscriptionItem(s.id)}
+                              className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-600 hover:bg-rose-50 text-xs font-bold cursor-pointer"
+                              title="刪除此訂閱項目"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -2688,13 +3063,43 @@ function doPost(e) {
               </section>
             )}
 
-            {/* VIEW 3: 滿版四象限 To-Do */}
+            {/* =========================================================
+                VIEW 3: 滿版四象限 To-Do (含分類篩選、新增分類、Sub-tasks & Note)
+               ========================================================= */}
             {activeTab === 'matrix' && (
               <section className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-6 space-y-5">
                 <div className="flex flex-wrap items-center justify-between gap-4">
                   <div>
-                    <h2 className="text-xl font-bold text-zinc-900">艾森豪四象限任務管理矩陣 (Full Sub-tasks & Notes)</h2>
-                    <p className="text-xs text-zinc-500">每個任務皆可展開新增子任務、設定日期時間與撰寫詳細備註</p>
+                    <h2 className="text-xl font-bold text-zinc-900">艾森豪四象限任務管理矩陣 (Full Categories, Sub-tasks & Notes)</h2>
+                    <p className="text-xs text-zinc-500">每個任務皆可設定分類標籤、展開新增子任務、設定日期時間與撰寫詳細備註</p>
+                  </div>
+
+                  {/* 滿版分類篩選與新增分類按鈕 */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {['ALL', ...(appState.todo.categories || [])].map((cat) => {
+                      const activeCat = appState.todo.activeCategoryFilter || 'ALL';
+                      return (
+                        <button
+                          key={cat}
+                          onClick={() =>
+                            setAppState((p) => ({ ...p, todo: { ...p.todo, activeCategoryFilter: cat } }))
+                          }
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition ${
+                            activeCat === cat
+                              ? 'bg-zinc-900 text-white shadow-sm'
+                              : 'bg-white/80 text-zinc-600 hover:bg-white'
+                          }`}
+                        >
+                          {cat === 'ALL' ? '全部分類' : cat}
+                        </button>
+                      );
+                    })}
+                    <button
+                      onClick={handleAddNewTaskCategory}
+                      className="px-3 py-1.5 rounded-xl bg-zinc-200 hover:bg-zinc-300 text-zinc-800 text-xs font-bold cursor-pointer"
+                    >
+                      ＋ 新增分類標籤
+                    </button>
                   </div>
                 </div>
 
@@ -2709,6 +3114,15 @@ function doPost(e) {
                     placeholder="輸入新任務名稱..."
                     className="flex-1 min-w-[200px] bg-zinc-100 px-3.5 py-2 rounded-xl text-xs text-zinc-900 border border-zinc-200 select-text"
                   />
+                  <select
+                    value={quickTaskCat}
+                    onChange={(e) => setQuickTaskCat(e.target.value)}
+                    className="bg-zinc-100 text-zinc-800 text-xs font-bold px-3 py-2 rounded-xl border border-zinc-200"
+                  >
+                    {(appState.todo.categories || []).map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
                   <input
                     type="date"
                     value={quickTaskDate}
@@ -2746,7 +3160,10 @@ function doPost(e) {
                     { key: 'NIE', title: 'NI&E ‧ 不重要但緊急', borderCls: 'border-t-4 border-t-amber-500', titleCls: 'text-amber-700' },
                     { key: 'NINE', title: 'NI&NE ‧ 不重要且不緊急', borderCls: 'border-t-4 border-t-zinc-400', titleCls: 'text-zinc-700' }
                   ].map((q) => {
-                    const tasksInQuad = (appState.todo.tasks || []).filter((t) => t.quad === q.key);
+                    const activeCat = appState.todo.activeCategoryFilter || 'ALL';
+                    const tasksInQuad = (appState.todo.tasks || []).filter(
+                      (t) => t.quad === q.key && (activeCat === 'ALL' || t.cat === activeCat)
+                    );
                     return (
                       <div
                         key={q.key}
@@ -2766,11 +3183,21 @@ function doPost(e) {
                                   ) : (
                                     <Circle className="w-4 h-4 text-zinc-400 shrink-0 mt-0.5" />
                                   )}
-                                  <div>
+                                  <div className="flex-1">
                                     <div className={`text-xs font-bold ${t.done ? 'line-through text-zinc-400' : 'text-zinc-900'}`}>
                                       {t.text}
                                     </div>
-                                    <div className="flex items-center gap-2 mt-1">
+                                    <div className="flex flex-wrap items-center gap-2 mt-1">
+                                      <select
+                                        value={t.cat || '#日常要務'}
+                                        onClick={(e) => e.stopPropagation()}
+                                        onChange={(e) => updateTaskField(t.id, 'cat', e.target.value)}
+                                        className="bg-zinc-200/80 px-2 py-0.5 rounded text-[10px] font-bold text-zinc-800"
+                                      >
+                                        {(appState.todo.categories || []).map((c) => (
+                                          <option key={c} value={c}>{c}</option>
+                                        ))}
+                                      </select>
                                       <input
                                         type="date"
                                         value={t.dueDate || ''}
@@ -3232,7 +3659,10 @@ function doPost(e) {
                   }));
                   setAccNameInput('');
                   setAccBalanceInput('');
+                  setAccInitDebtInput('');
+                  setAccAprInput('');
                   setShowAddAccModal(false);
+                  triggerToast('✓ 已新增帳戶項目');
                 }}
                 className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4"
               >
@@ -3251,16 +3681,35 @@ function doPost(e) {
                   type="text"
                   value={accNameInput}
                   onChange={(e) => setAccNameInput(e.target.value)}
-                  placeholder="帳戶代號名稱"
+                  placeholder="帳戶代號名稱 (如：Card A、Bank 1)"
                   className="w-full bg-zinc-100 px-3 py-2 rounded-xl text-xs"
                 />
                 <input
                   type="number"
                   value={accBalanceInput}
                   onChange={(e) => setAccBalanceInput(e.target.value)}
-                  placeholder="當前金額 ($)"
+                  placeholder="當前金額 / 剩餘欠款 ($)"
                   className="w-full bg-zinc-100 px-3 py-2 rounded-xl text-xs font-mono font-bold"
                 />
+                {accCatInput === 'DEBT' && (
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <input
+                      type="number"
+                      value={accInitDebtInput}
+                      onChange={(e) => setAccInitDebtInput(e.target.value)}
+                      placeholder="初始總欠款 ($)"
+                      className="w-full bg-zinc-100 px-3 py-2 rounded-xl text-xs font-mono"
+                    />
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={accAprInput}
+                      onChange={(e) => setAccAprInput(e.target.value)}
+                      placeholder="年利率 APR (%)"
+                      className="w-full bg-zinc-100 px-3 py-2 rounded-xl text-xs font-mono"
+                    />
+                  </div>
+                )}
                 <div className="flex justify-end gap-2">
                   <button
                     type="button"
