@@ -60,8 +60,9 @@
       <button onclick="togglePrivacy()" id="privacyBtn" class="px-2.5 py-1.5 rounded-xl glass-card text-xs font-semibold text-zinc-700 hover:bg-white" title="防窺遮罩">
         👁️ <span>正常顯示</span>
       </button>
-      <button onclick="openSyncModal()" class="px-2.5 py-1.5 rounded-xl glass-card text-xs font-semibold text-zinc-700 hover:bg-white">
-        ☁️ 雲端同步
+      <button onclick="openSyncModal()" id="cloudStatusBtn" class="px-2.5 py-1.5 rounded-xl glass-card text-xs font-semibold text-zinc-700 hover:bg-white flex items-center gap-1.5">
+        <span id="cloudStatusDot" class="w-2 h-2 rounded-full bg-zinc-400"></span>
+        <span id="cloudStatusText">☁️ 雲端同步</span>
       </button>
       <button onclick="exportData()" class="px-2 py-1.5 rounded-xl glass-card text-xs text-zinc-700 hover:text-zinc-900">⬇ 備份</button>
       <label class="px-2 py-1.5 rounded-xl glass-card text-xs text-zinc-700 hover:text-zinc-900 cursor-pointer">
@@ -249,7 +250,7 @@
     </div>
   </main>
 
-  <!-- FLOATING QUICK EXPENSE ACTION BUTTON (MOBILE FRIENDLY) -->
+  <!-- FLOATING QUICK EXPENSE ACTION BUTTON -->
   <button onclick="openQuickExpenseModal()" class="fixed bottom-6 right-6 w-14 h-14 bg-zinc-900 text-white rounded-full shadow-2xl flex items-center justify-center text-xl font-bold z-40 hover:scale-105 active:scale-95 transition-all">
     ＋
   </button>
@@ -305,8 +306,42 @@
     </div>
   </div>
 
+  <!-- MODAL: GOOGLE SHEETS CLOUD SYNC -->
+  <div id="syncModal" class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 hidden items-center justify-center p-4">
+    <div class="glass-panel bg-white/95 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+      <div class="flex justify-between items-center pb-2 border-b border-zinc-200">
+        <div>
+          <h3 class="font-bold text-sm text-zinc-900">☁️ Google Sheets 雲端同步中心</h3>
+          <p class="text-[11px] text-zinc-500">在電腦與 iPhone 間無縫同步所有數據</p>
+        </div>
+        <button onclick="closeSyncModal()" class="text-zinc-400 font-bold">✕</button>
+      </div>
+      
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="font-semibold text-zinc-700 block mb-1">Google Apps Script 網頁應用程式網址 (Web App URL)</label>
+          <input id="cloudGasUrl" type="url" placeholder="https://script.google.com/macros/s/AKfycb.../exec" class="w-full bg-zinc-100 px-3 py-2 rounded-xl font-mono-tech text-zinc-900 border border-zinc-300 focus:outline-none" />
+        </div>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" id="cloudAutoSync" class="rounded text-zinc-900" />
+          <span class="font-medium text-emerald-800">每次修改時自動在背景推送到 Google Sheets</span>
+        </label>
+        <div class="bg-zinc-100 p-3 rounded-xl text-[11px] text-zinc-500" id="cloudStatusMsg">
+          目前狀態：本地離線模式
+        </div>
+      </div>
+
+      <div class="flex justify-between items-center pt-2">
+        <button onclick="pullCloudData()" class="px-3 py-2 rounded-xl bg-zinc-200 hover:bg-zinc-300 text-zinc-800 text-xs font-semibold">⬇ 從雲端拉取覆蓋</button>
+        <button onclick="pushCloudData(true)" class="px-4 py-2 rounded-xl bg-zinc-900 text-white text-xs font-semibold">⬆ 推送本機至雲端</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const STORE_KEY = 'LIFE_OS_V7_PRO';
+    const CLOUD_CFG_KEY = 'LIFE_OS_CLOUD_CFG_V7';
+
     const defaultState = {
       privacy: false,
       dateReview: { date: '', amGoal: '', pmWin: '', noImpulse: true },
@@ -333,6 +368,8 @@
     };
 
     let state = loadState();
+    let cloudCfg = loadCloudConfig();
+    let autoSyncTimer = null;
 
     function loadState() {
       try {
@@ -343,9 +380,109 @@
       }
     }
 
+    function loadCloudConfig() {
+      try {
+        const raw = localStorage.getItem(CLOUD_CFG_KEY);
+        return raw ? JSON.parse(raw) : { url: '', auto: true };
+      } catch (e) {
+        return { url: '', auto: true };
+      }
+    }
+
     function saveState() {
       localStorage.setItem(STORE_KEY, JSON.stringify(state));
       render();
+      if (cloudCfg.url && cloudCfg.auto) {
+        clearTimeout(autoSyncTimer);
+        autoSyncTimer = setTimeout(() => pushCloudData(false), 2000);
+      }
+    }
+
+    // CLOUD SYNC FUNCTIONS
+    function openSyncModal() {
+      document.getElementById('cloudGasUrl').value = cloudCfg.url || '';
+      document.getElementById('cloudAutoSync').checked = cloudCfg.auto !== false;
+      document.getElementById('syncModal').classList.remove('hidden');
+      document.getElementById('syncModal').classList.add('flex');
+    }
+
+    function closeSyncModal() {
+      cloudCfg.url = document.getElementById('cloudGasUrl').value.trim();
+      cloudCfg.auto = document.getElementById('cloudAutoSync').checked;
+      localStorage.setItem(CLOUD_CFG_KEY, JSON.stringify(cloudCfg));
+      updateCloudBadge();
+      document.getElementById('syncModal').classList.add('hidden');
+      document.getElementById('syncModal').classList.remove('flex');
+    }
+
+    function updateCloudBadge(status) {
+      const dot = document.getElementById('cloudStatusDot');
+      const text = document.getElementById('cloudStatusText');
+      if (status === 'syncing') {
+        dot.className = 'w-2 h-2 rounded-full bg-amber-500 animate-pulse';
+        text.textContent = '同步中...';
+      } else if (cloudCfg.url) {
+        dot.className = 'w-2 h-2 rounded-full bg-emerald-500';
+        text.textContent = '已連線雲端';
+      } else {
+        dot.className = 'w-2 h-2 rounded-full bg-zinc-400';
+        text.textContent = '本機模式';
+      }
+    }
+
+    async function pushCloudData(showAlert) {
+      const url = (document.getElementById('cloudGasUrl')?.value || cloudCfg.url || '').trim();
+      if (!url) {
+        if (showAlert) alert('請先填寫 Google Apps Script 網址！');
+        return;
+      }
+      cloudCfg.url = url;
+      localStorage.setItem(CLOUD_CFG_KEY, JSON.stringify(cloudCfg));
+      updateCloudBadge('syncing');
+
+      try {
+        await fetch(url, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(state)
+        });
+        updateCloudBadge('synced');
+        const msg = `已於 ${new Date().toLocaleTimeString()} 成功推送到 Google Sheets！`;
+        const el = document.getElementById('cloudStatusMsg');
+        if (el) el.textContent = msg;
+        if (showAlert) alert(msg);
+      } catch (err) {
+        updateCloudBadge('error');
+        if (showAlert) alert('同步失敗，請確認 Apps Script 權限設為「任何人 (Anyone)」。');
+      }
+    }
+
+    async function pullCloudData() {
+      const url = (document.getElementById('cloudGasUrl')?.value || cloudCfg.url || '').trim();
+      if (!url) {
+        alert('請先填寫 Google Apps Script 網址！');
+        return;
+      }
+      cloudCfg.url = url;
+      localStorage.setItem(CLOUD_CFG_KEY, JSON.stringify(cloudCfg));
+      updateCloudBadge('syncing');
+
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data && data.expenses) {
+          state = data;
+          localStorage.setItem(STORE_KEY, JSON.stringify(state));
+          render();
+          updateCloudBadge('synced');
+          alert('✓ 成功從 Google Sheets 拉取最新數據！');
+        } else {
+          alert('雲端試算表目前為空，請先點擊「推送本機至雲端」進行初始化！');
+        }
+      } catch (err) {
+        alert('連線失敗，請檢查網址與試算表權限。');
+      }
     }
 
     function switchTab(t) {
@@ -382,6 +519,7 @@
       renderBodyHUD();
       renderResources();
       calcGoal();
+      updateCloudBadge();
     }
 
     function renderDashboard() {
@@ -394,7 +532,7 @@
       state.dateReview.amGoal = document.getElementById('amGoalInput').value;
       state.dateReview.pmWin = document.getElementById('pmWinInput').value;
       state.dateReview.noImpulse = document.getElementById('noImpulseCheck').checked;
-      localStorage.setItem(STORE_KEY, JSON.stringify(state));
+      saveState();
     }
 
     function archiveTodayReview() {
