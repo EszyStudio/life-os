@@ -139,7 +139,7 @@
     const GAS_URL_KEY = 'LIFE_OS_GAS_URL';
 
     const GAS_BACKEND_SCRIPT = `// =====================================================
-// LIFE OS v7.0 // Google Sheets 雙向雲端資料庫後端 (Zero-CORS)
+// LIFE OS v7.5 // Google Sheets 雙向雲端資料庫後端 (Zero-CORS)
 // =====================================================
 function doGet(e) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -405,6 +405,7 @@ function doPost(e) {
               mindset: {
                 ...DEFAULT_STATE.mindset,
                 ...(parsed.mindset || {}),
+                timeblocks: parsed.mindset?.timeblocks?.length ? parsed.mindset.timeblocks : DEFAULT_STATE.mindset.timeblocks,
                 dailyReview: { ...DEFAULT_STATE.mindset.dailyReview, ...(parsed.mindset?.dailyReview || {}) }
               },
               todo: {
@@ -455,7 +456,10 @@ function doPost(e) {
       }, []);
 
       const [activeTab, setActiveTab] = useState('command');
-      const [financeSubTab, setFinanceSubTab] = useState('overview'); // overview | budgets | goals | subscriptions | resources
+      // 修訂 3：將新增的第 5 頁面 'pie_daily' 設為財務倉首要預設顯示！
+      const [financeSubTab, setFinanceSubTab] = useState('pie_daily'); // pie_daily | overview | subscriptions | budgets | goals | resources
+      const [dailyLogCategoryFilter, setDailyLogCategoryFilter] = useState('ALL');
+
       const [toastMsg, setToastMsg] = useState(null);
       const triggerToast = (msg) => {
         setToastMsg(msg);
@@ -522,20 +526,109 @@ function doPost(e) {
         triggerToast(cleaned ? '🔒 已設定安全 PIN 碼！點擊頂部鎖頭即可鎖屏' : '已取消 PIN 碼保護');
       };
 
+      // =====================================================
+      // 修訂 4：右下角 Quick Action Button 支援「閃電記帳」與「快速增加 To-Do」雙模態
+      // =====================================================
       const [showQuickExpenseModal, setShowQuickExpenseModal] = useState(false);
+      const [quickActionMode, setQuickActionMode] = useState('EXPENSE'); // 'EXPENSE' | 'TODO'
+
       const [fabTxType, setFabTxType] = useState('EXPENSE');
       const [fabTxCategory, setFabTxCategory] = useState('飲食');
       const [fabTxAmount, setFabTxAmount] = useState('');
       const [fabTxTitle, setFabTxTitle] = useState('');
       const [fabTxDate, setFabTxDate] = useState(getTodayIso());
 
+      // FAB 快速新增 To-Do 專用 State
+      const [fabTodoText, setFabTodoText] = useState('');
+      const [fabTodoQuad, setFabTodoQuad] = useState('IE');
+      const [fabTodoCat, setFabTodoCat] = useState('#財務清債');
+      const [fabTodoDate, setFabTodoDate] = useState(getTodayIso());
+      const [fabTodoTime, setFabTodoTime] = useState('');
+      const [fabTodoNote, setFabTodoNote] = useState('');
+
+      const handleFabTodoSubmit = (e) => {
+        e.preventDefault();
+        if (!fabTodoText.trim()) return;
+        const newTask = {
+          id: `t-${Date.now()}`,
+          text: fabTodoText.trim(),
+          quad: fabTodoQuad,
+          cat: fabTodoCat || (appState.todo.categories?.[0] || '#日常要務'),
+          done: false,
+          dueDate: fabTodoDate || '',
+          dueTime: fabTodoTime || '',
+          note: fabTodoNote.trim(),
+          subtasks: []
+        };
+        setAppState((prev) => ({
+          ...prev,
+          todo: { ...prev.todo, tasks: [newTask, ...prev.todo.tasks] }
+        }));
+        setFabTodoText('');
+        setFabTodoNote('');
+        setShowQuickExpenseModal(false);
+        triggerToast(`✓ 已快速新增 To-Do 至 [${newTask.quad}] ${newTask.cat}`);
+      };
+
       const [calMonthOffset, setCalMonthOffset] = useState(0);
 
+      // =====================================================
+      // 修訂 1：每日心智複盤 Timeblocks 可 Edit 時間與文字 + 可加減時段
+      // =====================================================
       const [timerMode, setTimerMode] = useState({ label: '25m 專注', minutes: 25 });
       const [secondsLeft, setSecondsLeft] = useState(25 * 60);
       const [timerRunning, setTimerRunning] = useState(false);
       const [reviewSubTab, setReviewSubTab] = useState('AM');
       const [editingPrinciples, setEditingPrinciples] = useState(false);
+      const [editingTimeblocks, setEditingTimeblocks] = useState(false);
+
+      const handleUpdateTimeblock = (tbId, field, value) => {
+        setAppState((prev) => ({
+          ...prev,
+          mindset: {
+            ...prev.mindset,
+            timeblocks: (prev.mindset.timeblocks || []).map((tb) =>
+              tb.id === tbId ? { ...tb, [field]: value } : tb
+            )
+          }
+        }));
+      };
+
+      const handleAddTimeblock = () => {
+        const newTb = {
+          id: `tb-${Date.now()}`,
+          time: '22:30 - 23:30',
+          title: '新時段 // 點擊修改任務內容'
+        };
+        setAppState((prev) => ({
+          ...prev,
+          mindset: {
+            ...prev.mindset,
+            timeblocks: [...(prev.mindset.timeblocks || []), newTb],
+            activeTimeblockId: newTb.id
+          }
+        }));
+        setEditingTimeblocks(true);
+        triggerToast('✓ 已新增時間塊時段');
+      };
+
+      const handleDeleteTimeblock = (tbId) => {
+        setAppState((prev) => {
+          const filtered = (prev.mindset.timeblocks || []).filter((tb) => tb.id !== tbId);
+          return {
+            ...prev,
+            mindset: {
+              ...prev.mindset,
+              timeblocks: filtered,
+              activeTimeblockId:
+                prev.mindset.activeTimeblockId === tbId
+                  ? filtered[0]?.id || ''
+                  : prev.mindset.activeTimeblockId
+            }
+          };
+        });
+        triggerToast('🗑️ 已刪除該時段');
+      };
 
       useEffect(() => {
         if (!timerRunning) return;
@@ -604,7 +697,7 @@ function doPost(e) {
       };
 
       // =====================================================
-      // 修訂 3：四象限 To-Do 支援分類 (Category) 與新增分類
+      // 四象限 To-Do 支援分類 (Category) 與新增分類
       // =====================================================
       const [quickTaskText, setQuickTaskText] = useState('');
       const [quickTaskQuad, setQuickTaskQuad] = useState('IE');
@@ -733,11 +826,13 @@ function doPost(e) {
       };
 
       // =====================================================
-      // 身體機能 (BODY)
+      // 修訂 2：身體機能 (BODY) 支援覆查、點擊修改與刪除過往歷史紀錄
       // =====================================================
       const [activeBodyChartMetric, setActiveBodyChartMetric] = useState('weightKg');
       const [showHealthModal, setShowHealthModal] = useState(false);
+      const [editingHealthRecordId, setEditingHealthRecordId] = useState(null);
       const [healthDateInput, setHealthDateInput] = useState(getTodayIso());
+
       const latestHealthRecord = useMemo(() => {
         const list = appState.health.metricsHistory || [];
         return list.length > 0
@@ -756,11 +851,40 @@ function doPost(e) {
         [sleepStartInput, sleepEndInput]
       );
 
+      const handleLoadHealthRecordForEdit = (rec) => {
+        setEditingHealthRecordId(rec.id);
+        setHealthDateInput(rec.date);
+        setWeightInput(rec.weightKg);
+        setBfInput(rec.bodyFatPct);
+        setMuscleInput(rec.muscleMassKg || 38.5);
+        setSleepStartInput(rec.sleepStart || '00:00');
+        setSleepEndInput(rec.sleepEnd || '07:30');
+        setShowHealthModal(true);
+      };
+
+      const handleDeleteHealthRecord = (recId) => {
+        if ((appState.health.metricsHistory || []).length <= 1) {
+          triggerToast('⚠️ 至少需保留一筆基準身體數據');
+          return;
+        }
+        setAppState((prev) => ({
+          ...prev,
+          health: {
+            ...prev.health,
+            metricsHistory: (prev.health.metricsHistory || []).filter((r) => r.id !== recId)
+          }
+        }));
+        if (editingHealthRecordId === recId) {
+          setEditingHealthRecordId(null);
+        }
+        triggerToast('🗑️ 已刪除該筆身體機能紀錄');
+      };
+
       const handleSaveHealthRecord = (e) => {
         e.preventDefault();
         const calcHours = calculateSleepDuration(sleepStartInput, sleepEndInput);
         const newRec = {
-          id: `mh-${Date.now()}`,
+          id: editingHealthRecordId || `mh-${Date.now()}`,
           date: healthDateInput || getTodayIso(),
           weightKg: Number(weightInput) || 80.0,
           bodyFatPct: Number(bfInput) || 16.5,
@@ -770,15 +894,18 @@ function doPost(e) {
           sleepHours: calcHours
         };
         setAppState((prev) => {
-          const filtered = (prev.health.metricsHistory || []).filter((r) => r.date !== newRec.date);
+          const filtered = (prev.health.metricsHistory || []).filter(
+            (r) => r.id !== editingHealthRecordId && r.date !== newRec.date
+          );
           const updated = [...filtered, newRec].sort((a, b) => a.date.localeCompare(b.date));
           return {
             ...prev,
             health: { ...prev.health, metricsHistory: updated }
           };
         });
+        setEditingHealthRecordId(null);
         setShowHealthModal(false);
-        triggerToast(`✓ 已記錄 ${newRec.date} 身體指標（自動計算睡眠 ${calcHours} 小時）`);
+        triggerToast(`✓ 已儲存 ${newRec.date} 身體指標（睡眠 ${calcHours} 小時）`);
       };
 
       const cycleWorkoutDay = (idx) => {
@@ -792,7 +919,7 @@ function doPost(e) {
       };
 
       // =====================================================
-      // 修訂 1 & 2：財務區帳戶修改/刪除 + 獨立每月訂閱生死簿
+      // 財務區帳戶修改/刪除 + 訂閱生死簿 + 預算 + 目標 + 網課
       // =====================================================
       const [budgetPeriodTab, setBudgetPeriodTab] = useState('MONTHLY');
       const [newBudgetCat, setNewBudgetCat] = useState('飲食');
@@ -808,7 +935,6 @@ function doPost(e) {
       const [resCostInput, setResCostInput] = useState('');
       const [resNoteInput, setResNoteInput] = useState('');
 
-      // 訂閱生死簿 State
       const [subNameInput, setSubNameInput] = useState('');
       const [subCostInput, setSubCostInput] = useState('');
       const [subDayInput, setSubDayInput] = useState('');
@@ -820,7 +946,6 @@ function doPost(e) {
       const [accInitDebtInput, setAccInitDebtInput] = useState('');
       const [accAprInput, setAccAprInput] = useState('');
 
-      // 帳戶修改與刪除輔助函式
       const updateAccountField = (accId, field, val) => {
         setAppState((prev) => ({
           ...prev,
@@ -854,7 +979,6 @@ function doPost(e) {
         triggerToast(`🗑️ 已刪除帳戶：${acc.name}`);
       };
 
-      // 每月訂閱生死簿 CRUD 函式
       const handleAddSubscription = (e) => {
         e.preventDefault();
         if (!subNameInput.trim()) return;
@@ -1021,6 +1145,25 @@ function doPost(e) {
           savedSubYearly: savedSubMonthly * 12
         };
       }, [appState.finance]);
+
+      // 按日期分組的每日開支記錄表數據
+      const dailyExpenseGroups = useMemo(() => {
+        const txs = (appState.finance.transactions || []).filter(
+          (t) => dailyLogCategoryFilter === 'ALL' || (t.category || '其他') === dailyLogCategoryFilter
+        );
+        const groups = {};
+        txs.forEach((t) => {
+          const d = t.date || '未知日期';
+          if (!groups[d]) {
+            groups[d] = { date: d, totalExpense: 0, items: [] };
+          }
+          if (t.type === 'EXPENSE') {
+            groups[d].totalExpense += Number(t.amount) || 0;
+          }
+          groups[d].items.push(t);
+        });
+        return Object.values(groups).sort((a, b) => b.date.localeCompare(a.date));
+      }, [appState.finance.transactions, dailyLogCategoryFilter]);
 
       const recordTransaction = (type, category, title, amountVal, dateStr = getTodayIso()) => {
         const amt = Number(amountVal) || 0;
@@ -1288,19 +1431,32 @@ function doPost(e) {
             </div>
           )}
 
-          <button
-            onClick={() => {
-              setFabTxDate(getTodayIso());
-              setShowQuickExpenseModal(true);
-            }}
-            className="fixed bottom-5 right-5 z-40 px-4 py-3.5 rounded-full bg-gradient-to-b from-zinc-800 to-zinc-950 text-white shadow-[0_12px_28px_rgba(0,0,0,0.32)] border border-white/25 flex items-center gap-2 hover:scale-105 active:scale-95 transition cursor-pointer"
-            title="手機閃電記帳 Action Button"
-          >
-            <div className="w-6 h-6 rounded-full bg-emerald-500 text-zinc-950 flex items-center justify-center font-bold">
-              <Plus className="w-4 h-4 stroke-[3]" />
-            </div>
-            <span className="text-xs font-bold tracking-wide pr-1">閃電記帳</span>
-          </button>
+          {/* 修訂 4：右下角雙模態 Quick Action 懸浮膠囊 (閃電記帳 + 快速 To-Do) */}
+          <div className="fixed bottom-5 right-5 z-40 flex items-center gap-1.5 bg-gradient-to-b from-zinc-800 to-zinc-950 p-1.5 rounded-full shadow-[0_12px_28px_rgba(0,0,0,0.35)] border border-white/25">
+            <button
+              onClick={() => {
+                setFabTxDate(getTodayIso());
+                setQuickActionMode('EXPENSE');
+                setShowQuickExpenseModal(true);
+              }}
+              className="px-3.5 py-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+              title="手機閃電分類記帳"
+            >
+              <Plus className="w-3.5 h-3.5 stroke-[3]" />
+              <span>閃電記帳</span>
+            </button>
+            <button
+              onClick={() => {
+                setFabTodoDate(getTodayIso());
+                setQuickActionMode('TODO');
+                setShowQuickExpenseModal(true);
+              }}
+              className="px-3.5 py-2 rounded-full bg-white/15 hover:bg-white/25 text-white font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+              title="快速新增四象限 To-Do"
+            >
+              <span>＋To-Do</span>
+            </button>
+          </div>
 
           <input ref={fileInputRef} type="file" accept=".json" onChange={handleImportJsonBackup} className="hidden" />
 
@@ -1314,7 +1470,7 @@ function doPost(e) {
                 <div className="flex items-center gap-2">
                   <h1 className="font-bold text-base tracking-tight text-zinc-900">LIFE OS</h1>
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-zinc-900 text-emerald-400 font-mono">
-                    v7.2 PRO
+                    v7.5 PRO
                   </span>
                 </div>
                 <p className="text-[11px] text-zinc-500">{dateInfo.dateStr}</p>
@@ -1336,7 +1492,7 @@ function doPost(e) {
                   activeTab === 'finance' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-600 hover:text-zinc-900'
                 }`}
               >
-                <span>💰</span> 財務・預算・訂閱・目標・網課
+                <span>💰</span> 財務倉 (Pie・每日開支・帳戶・訂閱・預算)
               </button>
               <button
                 onClick={() => setActiveTab('matrix')}
@@ -1414,13 +1570,13 @@ function doPost(e) {
                ========================================================= */}
             {activeTab === 'command' && (
               <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* 象限 1 (左上): 每日心智複盤與時間塊調度 */}
+                {/* 象限 1 (左上): 每日心智複盤與時間塊調度 (支援編輯時間文字 + 加減時段) */}
                 <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-5 flex flex-col justify-between min-h-[560px]">
                   <div>
                     <div className="flex items-center justify-between gap-2 mb-2">
                       <div>
                         <h2 className="text-base font-bold text-zinc-900">每日心智複盤與時間塊調度</h2>
-                        <p className="text-xs text-zinc-500">結合時間塊番茄鐘與具日期時間戳記的晨晚閉環複盤</p>
+                        <p className="text-xs text-zinc-500">結合可自訂增減的時間塊番茄鐘與具日期時間戳記的晨晚複盤</p>
                       </div>
                       <button
                         onClick={() => setEditingPrinciples(!editingPrinciples)}
@@ -1459,7 +1615,7 @@ function doPost(e) {
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-12 gap-3.5 flex-1">
-                    {/* 左側：番茄鐘 + 時間塊 */}
+                    {/* 左側：番茄鐘 + 可編輯增減的時間塊 */}
                     <div className="sm:col-span-5 bg-white/65 border border-white rounded-2xl p-3 flex flex-col justify-between">
                       <div className="bg-white/90 rounded-xl p-2.5 border border-zinc-200/70">
                         <div className="flex items-center justify-between mb-1.5">
@@ -1513,25 +1669,95 @@ function doPost(e) {
                         </div>
                       </div>
 
-                      <div className="mt-2 space-y-1.5 flex-1 flex flex-col justify-between">
-                        {appState.mindset.timeblocks.map((tb) => {
+                      {/* 時間塊頂部控制列：支援新增與編輯模式切換 */}
+                      <div className="flex items-center justify-between mt-2.5 mb-1">
+                        <span className="text-[10px] font-mono font-bold text-zinc-500 uppercase">
+                          TIMEBLOCKS ({appState.mindset.timeblocks?.length || 0})
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={handleAddTimeblock}
+                            className="px-2 py-0.5 rounded bg-zinc-200 hover:bg-zinc-300 text-zinc-800 text-[10px] font-bold cursor-pointer"
+                            title="新增時段"
+                          >
+                            ＋新增
+                          </button>
+                          <button
+                            onClick={() => setEditingTimeblocks(!editingTimeblocks)}
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                              editingTimeblocks ? 'bg-emerald-600 text-white' : 'bg-zinc-200 text-zinc-700 hover:bg-zinc-300'
+                            }`}
+                          >
+                            {editingTimeblocks ? '✓ 完成' : '✎ 編輯'}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5 flex-1 overflow-y-auto max-h-[260px] pr-0.5">
+                        {(appState.mindset.timeblocks || []).map((tb) => {
                           const isActive = appState.mindset.activeTimeblockId === tb.id;
+                          if (editingTimeblocks) {
+                            return (
+                              <div
+                                key={tb.id}
+                                className="p-2 rounded-xl bg-white border border-zinc-300 space-y-1 shadow-sm"
+                              >
+                                <div className="flex items-center justify-between gap-1">
+                                  <input
+                                    type="text"
+                                    value={tb.time}
+                                    onChange={(e) => handleUpdateTimeblock(tb.id, 'time', e.target.value)}
+                                    placeholder="時間 (如 09:00 - 12:00)"
+                                    className="w-full bg-zinc-100 px-2 py-0.5 rounded text-[10px] font-mono font-bold text-zinc-800 border border-zinc-200 select-text"
+                                  />
+                                  <button
+                                    onClick={() => handleDeleteTimeblock(tb.id)}
+                                    className="px-1.5 py-0.5 rounded bg-rose-50 hover:bg-rose-100 text-rose-600 text-[10px] font-bold cursor-pointer shrink-0"
+                                    title="刪除此時段"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                                <input
+                                  type="text"
+                                  value={tb.title}
+                                  onChange={(e) => handleUpdateTimeblock(tb.id, 'title', e.target.value)}
+                                  placeholder="時段任務內容..."
+                                  className="w-full bg-zinc-100 px-2 py-1 rounded text-xs font-semibold text-zinc-900 border border-zinc-200 select-text"
+                                />
+                              </div>
+                            );
+                          }
                           return (
                             <div
                               key={tb.id}
                               onClick={() =>
                                 setAppState((p) => ({ ...p, mindset: { ...p.mindset, activeTimeblockId: tb.id } }))
                               }
-                              className={`px-2.5 py-1.5 rounded-xl border transition cursor-pointer ${
+                              className={`px-2.5 py-1.5 rounded-xl border transition cursor-pointer flex items-center justify-between gap-1 ${
                                 isActive
                                   ? 'bg-zinc-900 text-white border-zinc-900'
-                                  : 'bg-white/80 text-zinc-800 border-zinc-200/70'
+                                  : 'bg-white/80 text-zinc-800 border-zinc-200/70 hover:bg-white'
                               }`}
                             >
-                              <div className={`text-[10px] font-mono font-bold ${isActive ? 'text-emerald-400' : 'text-zinc-500'}`}>
-                                {isActive ? '● ' : ''}{tb.time}
+                              <div className="min-w-0 flex-1">
+                                <div className={`text-[10px] font-mono font-bold ${isActive ? 'text-emerald-400' : 'text-zinc-500'}`}>
+                                  {isActive ? '● ' : ''}{tb.time}
+                                </div>
+                                <div className="text-xs font-semibold truncate">{tb.title}</div>
                               </div>
-                              <div className="text-xs font-semibold truncate">{tb.title}</div>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingTimeblocks(true);
+                                }}
+                                className={`text-[10px] px-1 opacity-60 hover:opacity-100 ${
+                                  isActive ? 'text-zinc-300' : 'text-zinc-400'
+                                }`}
+                                title="編輯時段"
+                              >
+                                ✎
+                              </button>
                             </div>
                           );
                         })}
@@ -1734,7 +1960,7 @@ function doPost(e) {
                     </button>
                   </div>
 
-                  {/* 快速新增任務列 (加入分類選擇器) */}
+                  {/* 快速新增任務列 */}
                   <form
                     onSubmit={handleAddTask}
                     className="flex flex-wrap items-center gap-1.5 mb-3 bg-white/85 p-2 rounded-2xl border border-white"
@@ -1962,7 +2188,6 @@ function doPost(e) {
 
                                       {isExp && (
                                         <div className="pt-1.5 border-t border-zinc-100 space-y-1.5 text-[11px]">
-                                          {/* 展開時亦可直接切換分類 */}
                                           <div className="flex items-center justify-between gap-1">
                                             <span className="text-[10px] text-zinc-500">分類：</span>
                                             <select
@@ -2038,7 +2263,7 @@ function doPost(e) {
                   </div>
                 </div>
 
-                {/* 象限 3 (左下): 身體機能 (BODY) 四大指標折線圖 */}
+                {/* 象限 3 (左下): 身體機能 (BODY) 四大指標折線圖 + 覆查及修改過往數據 */}
                 <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-5 flex flex-col justify-between min-h-[540px]">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
@@ -2046,14 +2271,15 @@ function doPost(e) {
                         <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded bg-zinc-900 text-white">
                           BODY TELEMETRY
                         </span>
-                        <h2 className="text-base font-bold text-zinc-900">身體機能趨勢折線圖 ＆ 運動排程</h2>
+                        <h2 className="text-base font-bold text-zinc-900">身體機能趨勢折線圖 ＆ 歷史數據覆查</h2>
                       </div>
                       <p className="text-xs text-zinc-500 mt-0.5">
-                        追蹤體重、Body Fat%、總肌肉量與睡眠時數（輸入入睡與起床時間自動換算）
+                        點擊折線圖上的圓點或右上角按鈕，即可覆查、修改或新增任何日期的身體數據
                       </p>
                     </div>
                     <button
                       onClick={() => {
+                        setEditingHealthRecordId(null);
                         setHealthDateInput(getTodayIso());
                         setWeightInput(latestHealthRecord.weightKg);
                         setBfInput(latestHealthRecord.bodyFatPct);
@@ -2064,7 +2290,7 @@ function doPost(e) {
                       }}
                       className="px-3 py-1.5 rounded-xl bg-zinc-900 text-white text-xs font-semibold shadow-sm cursor-pointer"
                     >
-                      ＋ 記錄今日體態與睡眠
+                      ＋ 記錄 / 覆查修改歷史數據
                     </button>
                   </div>
 
@@ -2095,7 +2321,7 @@ function doPost(e) {
                     })}
                   </div>
 
-                  {/* SVG 歷史趨勢折線圖 */}
+                  {/* SVG 歷史趨勢折線圖 (支援點擊節點直接修改該日數據) */}
                   {(() => {
                     const history = [...(appState.health.metricsHistory || [])].sort((a, b) => a.date.localeCompare(b.date));
                     const metricConfig = {
@@ -2111,7 +2337,7 @@ function doPost(e) {
                     const range = maxVal - minVal || 1;
 
                     const width = 520;
-                    const height = 140;
+                    const height = 135;
                     const padX = 36;
                     const padY = 24;
 
@@ -2119,7 +2345,7 @@ function doPost(e) {
                       const x = history.length === 1 ? width / 2 : padX + (i / (history.length - 1)) * (width - padX * 2);
                       const val = Number(h[activeBodyChartMetric]) || 0;
                       const y = height - padY - ((val - minVal) / range) * (height - padY * 2);
-                      return { x, y, val, date: h.date.slice(5) };
+                      return { x, y, val, date: h.date.slice(5), rawRecord: h };
                     });
 
                     const polylineStr = points.map((p) => `${p.x},${p.y}`).join(' ');
@@ -2131,10 +2357,10 @@ function doPost(e) {
                             <Activity className="w-3.5 h-3.5 text-blue-600" />
                             {metricConfig.label} 歷史趨勢折線圖
                           </span>
-                          <span className="text-[10px] font-mono text-zinc-500">共 {history.length} 筆日期紀錄</span>
+                          <span className="text-[10px] font-mono text-zinc-500">點擊圖上圓點或下方列表可直接修改</span>
                         </div>
 
-                        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-[135px] overflow-visible">
+                        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-[125px] overflow-visible">
                           <line x1={padX} y1={padY} x2={width - padX} y2={padY} stroke="#e2e8f0" strokeDasharray="3 3" />
                           <line x1={padX} y1={height / 2} x2={width - padX} y2={height / 2} stroke="#e2e8f0" strokeDasharray="3 3" />
                           <line x1={padX} y1={height - padY} x2={width - padX} y2={height - padY} stroke="#cbd5e1" />
@@ -2142,13 +2368,34 @@ function doPost(e) {
                             <polyline fill="none" stroke={metricConfig.stroke} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" points={polylineStr} />
                           )}
                           {points.map((p, idx) => (
-                            <g key={idx}>
-                              <circle cx={p.x} cy={p.y} r="4" fill="#ffffff" stroke={metricConfig.stroke} strokeWidth="2.5" />
+                            <g
+                              key={idx}
+                              onClick={() => handleLoadHealthRecordForEdit(p.rawRecord)}
+                              className="cursor-pointer group"
+                            >
+                              <circle cx={p.x} cy={p.y} r="5" fill="#ffffff" stroke={metricConfig.stroke} strokeWidth="2.5" />
                               <text x={p.x} y={p.y - 8} textAnchor="middle" className="text-[10px] font-mono font-bold fill-zinc-800">{p.val}</text>
-                              <text x={p.x} y={height - 6} textAnchor="middle" className="text-[9px] font-mono fill-zinc-400">{p.date}</text>
+                              <text x={p.x} y={height - 5} textAnchor="middle" className="text-[9px] font-mono fill-zinc-500">{p.date}</text>
                             </g>
                           ))}
                         </svg>
+
+                        {/* 最近紀錄快速覆查條 */}
+                        <div className="flex items-center gap-1.5 overflow-x-auto pt-1.5 border-t border-zinc-200/70">
+                          <span className="text-[10px] font-bold text-zinc-400 shrink-0">最近紀錄(點擊修改)：</span>
+                          {[...(appState.health.metricsHistory || [])]
+                            .sort((a, b) => b.date.localeCompare(a.date))
+                            .slice(0, 5)
+                            .map((rec) => (
+                              <button
+                                key={rec.id}
+                                onClick={() => handleLoadHealthRecordForEdit(rec)}
+                                className="px-2 py-0.5 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-[10px] font-mono font-semibold text-zinc-700 whitespace-nowrap cursor-pointer"
+                              >
+                                ✎ {rec.date.slice(5)} ({rec.weightKg}kg / {rec.bodyFatPct}%)
+                              </button>
+                            ))}
+                        </div>
                       </div>
                     );
                   })()}
@@ -2191,10 +2438,13 @@ function doPost(e) {
                       <p className="text-xs text-zinc-500 mt-0.5">雙渦輪清債儲蓄環 + 長期消費分類佔比 (Pie Chart)</p>
                     </div>
                     <button
-                      onClick={() => setActiveTab('finance')}
+                      onClick={() => {
+                        setFinanceSubTab('pie_daily');
+                        setActiveTab('finance');
+                      }}
                       className="px-3 py-1.5 rounded-xl bg-zinc-900 text-white text-xs font-semibold shadow-sm cursor-pointer"
                     >
-                      帳戶・訂閱・預算・目標 ➔
+                      開支分佈・每日記錄・帳戶 ➔
                     </button>
                   </div>
 
@@ -2313,7 +2563,10 @@ function doPost(e) {
                       </div>
 
                       <button
-                        onClick={() => setShowQuickExpenseModal(true)}
+                        onClick={() => {
+                          setQuickActionMode('EXPENSE');
+                          setShowQuickExpenseModal(true);
+                        }}
                         className="w-full py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
                       >
                         <Plus className="w-3.5 h-3.5" /> 點擊開啟手機分類快速記帳
@@ -2325,13 +2578,14 @@ function doPost(e) {
             )}
 
             {/* =========================================================
-                VIEW 2: 財務監控儀表板 (含帳戶修改刪除、訂閱生死簿、預算表、目標計算器、網課庫)
+                VIEW 2: 財務倉 (首頁預設為「🥧 開支圓餅圖 & 每日開支記錄表」，原頁面完全保留)
                ========================================================= */}
             {activeTab === 'finance' && (
               <section className="space-y-6">
                 <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-5 flex flex-wrap items-center justify-between gap-4">
                   <div className="flex flex-wrap items-center gap-1.5 bg-zinc-200/75 p-1.5 rounded-2xl">
                     {[
+                      { id: 'pie_daily', label: '🥧 開支圓餅圖 & 每日開支記錄表' },
                       { id: 'overview', label: '🏦 帳戶增刪修改・收支流水' },
                       { id: 'subscriptions', label: '🔄 每月訂閱生死簿 (可加可減)' },
                       { id: 'budgets', label: '📊 日/周/月/季/年 分類預算表' },
@@ -2366,7 +2620,240 @@ function doPost(e) {
                   </div>
                 </div>
 
-                {/* 修訂 1：四大帳戶完整修改（名稱、餘額、APR、自訂加減）與刪除 */}
+                {/* 修訂 3：新增並作為首要顯示的「PIE CHART & 開支分佈 & 每日開支記錄表」 */}
+                {financeSubTab === 'pie_daily' && (
+                  <div className="space-y-6">
+                    {/* 上半部：大型 Pie Chart 與 7 大類別開支分佈排行榜 */}
+                    <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-6">
+                      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+                        <div>
+                          <h3 className="text-lg font-bold text-zinc-900 flex items-center gap-2">
+                            <PieChartIcon className="w-5 h-5 text-indigo-600" /> 消費開支圓餅圖 (Pie Chart) ＆ 類別開支分佈
+                          </h3>
+                          <p className="text-xs text-zinc-500 mt-0.5">
+                            自動匯總所有日常支出分類佔比，點擊右側「＋ 閃電記帳」可即時新增消費紀錄
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setQuickActionMode('EXPENSE');
+                            setShowQuickExpenseModal(true);
+                          }}
+                          className="px-4 py-2 rounded-xl bg-zinc-900 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-sm"
+                        >
+                          <Plus className="w-4 h-4" /> 新增每日開支記錄
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+                        {/* 左側：大型互動 SVG Donut Pie Chart */}
+                        <div className="lg:col-span-5 bg-white/85 rounded-2xl p-6 border border-white flex flex-col items-center justify-center">
+                          <div className="relative flex items-center justify-center">
+                            <svg viewBox="0 0 160 160" className="w-52 h-52">
+                              {(() => {
+                                const r = 58;
+                                const circum = 2 * Math.PI * r;
+                                let accumulatedPct = 0;
+                                if (finTotals.pieSlices.length === 0) {
+                                  return <circle cx="80" cy="80" r={r} fill="none" stroke="#e2e8f0" strokeWidth="24" />;
+                                }
+                                return finTotals.pieSlices.map((slice) => {
+                                  const strokeLen = (slice.pct / 100) * circum;
+                                  const offset = -(accumulatedPct / 100) * circum;
+                                  accumulatedPct += slice.pct;
+                                  return (
+                                    <circle
+                                      key={slice.id}
+                                      cx="80"
+                                      cy="80"
+                                      r={r}
+                                      fill="none"
+                                      stroke={slice.color}
+                                      strokeWidth="24"
+                                      strokeDasharray={`${strokeLen} ${circum}`}
+                                      strokeDashoffset={offset}
+                                      transform="rotate(-90 80 80)"
+                                    />
+                                  );
+                                });
+                              })()}
+                              <text x="80" y="72" textAnchor="middle" className="fill-zinc-400 text-[9px] font-mono font-bold">
+                                TOTAL SPENT
+                              </text>
+                              <text x="80" y="92" textAnchor="middle" className="fill-zinc-900 text-sm font-mono font-extrabold">
+                                {formatCurrency(finTotals.totalExpenses)}
+                              </text>
+                            </svg>
+                          </div>
+                        </div>
+
+                        {/* 右側：各類別開支分佈進度條與佔比明細 */}
+                        <div className="lg:col-span-7 bg-white/85 rounded-2xl p-5 border border-white space-y-3">
+                          <div className="flex items-center justify-between border-b border-zinc-200/70 pb-2">
+                            <span className="text-xs font-bold text-zinc-700">各類別開支分佈明細 (點擊類別可篩選下方每日記錄表)</span>
+                            <span className="text-xs font-mono font-bold text-zinc-500">金額 / 佔比</span>
+                          </div>
+                          <div className="space-y-2.5">
+                            {EXPENSE_CATEGORIES.map((cat) => {
+                              const amt = finTotals.categoryTotals[cat.id] || 0;
+                              const pct = finTotals.totalExpenses > 0 ? Math.round((amt / finTotals.totalExpenses) * 100) : 0;
+                              const isSelected = dailyLogCategoryFilter === cat.id;
+                              return (
+                                <div
+                                  key={cat.id}
+                                  onClick={() =>
+                                    setDailyLogCategoryFilter(dailyLogCategoryFilter === cat.id ? 'ALL' : cat.id)
+                                  }
+                                  className={`p-2 rounded-xl border transition cursor-pointer ${
+                                    isSelected ? 'bg-zinc-900 text-white border-zinc-900' : 'hover:bg-zinc-50 border-transparent'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between text-xs mb-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: cat.color }} />
+                                      <span className="font-bold">{cat.label}</span>
+                                    </div>
+                                    <div className="font-mono font-bold">
+                                      {formatCurrency(amt)}{' '}
+                                      <span className={isSelected ? 'text-emerald-400' : 'text-zinc-400'}>({pct}%)</span>
+                                    </div>
+                                  </div>
+                                  <div className="w-full h-2 bg-zinc-200/80 rounded-full overflow-hidden">
+                                    <div
+                                      className="h-full rounded-full transition-all"
+                                      style={{ width: `${pct}%`, backgroundColor: cat.color }}
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 下半部：📅 每日開支記錄表 (按日期分組 + 顯示當日小計) */}
+                    <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-6 space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-lg font-bold text-zinc-900">📅 每日開支記錄表 (Daily Expense Log)</h3>
+                          <p className="text-xs text-zinc-500">按日期自動歸納每日消費明細與當日開支小計</p>
+                        </div>
+
+                        {/* 分類篩選膠囊 */}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            onClick={() => setDailyLogCategoryFilter('ALL')}
+                            className={`px-3 py-1 rounded-xl text-xs font-bold cursor-pointer ${
+                              dailyLogCategoryFilter === 'ALL' ? 'bg-zinc-900 text-white' : 'bg-white text-zinc-600'
+                            }`}
+                          >
+                            全部類別
+                          </button>
+                          {EXPENSE_CATEGORIES.map((c) => (
+                            <button
+                              key={c.id}
+                              onClick={() => setDailyLogCategoryFilter(c.id)}
+                              className={`px-2.5 py-1 rounded-xl text-xs font-bold cursor-pointer ${
+                                dailyLogCategoryFilter === c.id ? 'bg-zinc-900 text-white' : 'bg-white text-zinc-600'
+                              }`}
+                            >
+                              {c.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        {dailyExpenseGroups.length === 0 ? (
+                          <div className="text-center py-8 text-xs text-zinc-400">目前尚無符合條件的每日開支紀錄</div>
+                        ) : (
+                          dailyExpenseGroups.map((group) => (
+                            <div
+                              key={group.date}
+                              className="bg-white/90 rounded-2xl border border-zinc-200/80 overflow-hidden shadow-sm"
+                            >
+                              {/* 日期標頭與當日開支總計 */}
+                              <div className="bg-zinc-100/90 px-4 py-2.5 border-b border-zinc-200/80 flex items-center justify-between">
+                                <span className="text-xs font-mono font-extrabold text-zinc-800 flex items-center gap-1.5">
+                                  <CalendarIcon className="w-3.5 h-3.5 text-zinc-500" /> {group.date}
+                                </span>
+                                <span className="text-xs font-mono font-bold text-rose-600">
+                                  當日支出小計：{formatCurrency(group.totalExpense)}
+                                </span>
+                              </div>
+
+                              {/* 該日明細列 */}
+                              <div className="divide-y divide-zinc-100">
+                                {group.items.map((t) => {
+                                  const catMeta = EXPENSE_CATEGORIES.find((c) => c.id === t.category) || EXPENSE_CATEGORIES[6];
+                                  return (
+                                    <div
+                                      key={t.id}
+                                      className="px-4 py-2.5 flex items-center justify-between hover:bg-zinc-50/80 transition"
+                                    >
+                                      <div className="flex items-center gap-3">
+                                        <span
+                                          className="px-2.5 py-1 rounded-lg text-white text-[11px] font-bold"
+                                          style={{ backgroundColor: catMeta.color }}
+                                        >
+                                          {t.category || '其他'}
+                                        </span>
+                                        <div>
+                                          <div className="text-xs font-bold text-zinc-900">{t.title}</div>
+                                          <div className="text-[10px] text-zinc-400">
+                                            {t.type === 'EXPENSE'
+                                              ? '日常支出'
+                                              : t.type === 'DEBT_PAY'
+                                              ? '🔥 償還負債'
+                                              : t.type === 'SAVING_ADD'
+                                              ? '🌱 存入儲蓄'
+                                              : '＋ 收入'}{' '}
+                                            ‧ {t.accountName}
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      <div className="flex items-center gap-3">
+                                        <span
+                                          className={`text-xs font-mono font-extrabold ${
+                                            t.type === 'INCOME' || t.type === 'SAVING_ADD'
+                                              ? 'text-emerald-700'
+                                              : 'text-zinc-900'
+                                          }`}
+                                        >
+                                          {t.type === 'EXPENSE' || t.type === 'DEBT_PAY' ? '-' : '+'}
+                                          {formatCurrency(t.amount)}
+                                        </span>
+                                        <button
+                                          onClick={() =>
+                                            setAppState((p) => ({
+                                              ...p,
+                                              finance: {
+                                                ...p.finance,
+                                                transactions: p.finance.transactions.filter((x) => x.id !== t.id)
+                                              }
+                                            }))
+                                          }
+                                          className="text-zinc-300 hover:text-rose-600 text-xs font-bold cursor-pointer"
+                                          title="刪除此筆紀錄"
+                                        >
+                                          ✕
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 原有 4 個財務子頁面 100% 保持不變 */}
                 {financeSubTab === 'overview' && (
                   <div className="space-y-6">
                     <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-6">
@@ -2495,7 +2982,10 @@ function doPost(e) {
                       <div className="flex items-center justify-between mb-4">
                         <h3 className="text-base font-bold text-zinc-900">分類記帳歷史流水明細</h3>
                         <button
-                          onClick={() => setShowQuickExpenseModal(true)}
+                          onClick={() => {
+                            setQuickActionMode('EXPENSE');
+                            setShowQuickExpenseModal(true);
+                          }}
                           className="px-3.5 py-1.5 rounded-xl bg-zinc-900 text-white text-xs font-semibold cursor-pointer"
                         >
                           ＋ 記一筆
@@ -2540,7 +3030,6 @@ function doPost(e) {
                   </div>
                 )}
 
-                {/* 修訂 2：獨立「每月訂閱生死簿 (Subscriptions)」 */}
                 {financeSubTab === 'subscriptions' && (
                   <div className="bg-white/75 backdrop-blur-2xl border border-white/90 shadow-sm rounded-3xl p-6 space-y-5">
                     <div className="flex flex-wrap items-center justify-between gap-4">
@@ -3282,143 +3771,272 @@ function doPost(e) {
             )}
           </main>
 
-          {/* MODAL 1: 📱 閃電記帳 */}
+          {/* =========================================================
+              MODAL 1: 📱 右下角雙模態 Quick Action Modal (閃電記帳 + 快速新增 To-Do)
+             ========================================================= */}
           {showQuickExpenseModal && (
             <div
               onClick={() => setShowQuickExpenseModal(false)}
               className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
             >
-              <form
+              <div
                 onClick={(e) => e.stopPropagation()}
-                onSubmit={handleFabQuickSubmit}
                 className="bg-white rounded-t-3xl sm:rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4"
               >
+                {/* 頂部切換：閃電記帳 vs 快速新增 To-Do */}
                 <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-base font-bold text-zinc-900">⚡ 手機閃電分類記帳</h3>
-                    <p className="text-[11px] text-zinc-500">自動歸入財務區 Pie Chart 與多週期預算表</p>
+                  <div className="flex items-center gap-1 bg-zinc-100 p-1 rounded-xl flex-1 mr-3">
+                    <button
+                      type="button"
+                      onClick={() => setQuickActionMode('EXPENSE')}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition ${
+                        quickActionMode === 'EXPENSE' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
+                      }`}
+                    >
+                      💰 閃電分類記帳
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setQuickActionMode('TODO')}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition ${
+                        quickActionMode === 'TODO' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
+                      }`}
+                    >
+                      ⊞ 快速新增 To-Do
+                    </button>
                   </div>
                   <button
                     type="button"
                     onClick={() => setShowQuickExpenseModal(false)}
-                    className="w-8 h-8 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-600"
+                    className="w-8 h-8 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-600 cursor-pointer shrink-0"
                   >
                     <X className="w-4 h-4" />
                   </button>
                 </div>
 
-                <div className="grid grid-cols-4 gap-1.5 bg-zinc-100 p-1 rounded-xl">
-                  {[
-                    { id: 'EXPENSE', label: '－支出' },
-                    { id: 'DEBT_PAY', label: '🔥 還債' },
-                    { id: 'SAVING_ADD', label: '🌱 儲蓄' },
-                    { id: 'INCOME', label: '＋收入' }
-                  ].map((t) => (
+                {quickActionMode === 'EXPENSE' ? (
+                  <form onSubmit={handleFabQuickSubmit} className="space-y-4">
+                    <div className="grid grid-cols-4 gap-1.5 bg-zinc-100 p-1 rounded-xl">
+                      {[
+                        { id: 'EXPENSE', label: '－支出' },
+                        { id: 'DEBT_PAY', label: '🔥 還債' },
+                        { id: 'SAVING_ADD', label: '🌱 儲蓄' },
+                        { id: 'INCOME', label: '＋收入' }
+                      ].map((t) => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => setFabTxType(t.id)}
+                          className={`py-1.5 rounded-lg text-xs font-bold cursor-pointer ${
+                            fabTxType === t.id ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
+                          }`}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="col-span-2 bg-zinc-100 rounded-2xl px-3.5 py-2 border border-zinc-200">
+                        <label className="text-[10px] font-bold text-zinc-500 block">金額 ($)</label>
+                        <input
+                          type="number"
+                          value={fabTxAmount}
+                          onChange={(e) => setFabTxAmount(e.target.value)}
+                          placeholder="0.00"
+                          autoFocus
+                          className="w-full bg-transparent text-xl font-mono font-extrabold text-zinc-900 focus:outline-none"
+                        />
+                      </div>
+                      <div className="bg-zinc-100 rounded-2xl px-3 py-2 border border-zinc-200 flex flex-col justify-center">
+                        <label className="text-[10px] font-bold text-zinc-500 block">日期</label>
+                        <input
+                          type="date"
+                          value={fabTxDate}
+                          onChange={(e) => setFabTxDate(e.target.value)}
+                          className="bg-transparent text-xs font-mono font-bold text-zinc-900 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-zinc-700 block mb-1.5">選擇分類 (連動 Pie Chart 統計)：</label>
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {EXPENSE_CATEGORIES.map((c) => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => setFabTxCategory(c.id)}
+                            className={`py-2 px-1 rounded-xl text-xs font-bold border transition cursor-pointer ${
+                              fabTxCategory === c.id
+                                ? 'bg-zinc-900 text-white border-zinc-900 shadow-sm'
+                                : 'bg-zinc-50 text-zinc-700 border-zinc-200'
+                            }`}
+                          >
+                            {c.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <input
+                      type="text"
+                      value={fabTxTitle}
+                      onChange={(e) => setFabTxTitle(e.target.value)}
+                      placeholder="備註說明（可留空，如：午餐、搭車）"
+                      className="w-full bg-zinc-100 px-3.5 py-2.5 rounded-xl text-xs text-zinc-900 border border-zinc-200 select-text"
+                    />
+
                     <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => setFabTxType(t.id)}
-                      className={`py-1.5 rounded-lg text-xs font-bold cursor-pointer ${
-                        fabTxType === t.id ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-600'
-                      }`}
+                      type="submit"
+                      className="w-full py-3 rounded-2xl bg-zinc-900 text-white text-xs font-bold tracking-wider uppercase shadow-lg cursor-pointer"
                     >
-                      {t.label}
+                      ✓ 確認記帳並更新圖表
                     </button>
-                  ))}
-                </div>
+                  </form>
+                ) : (
+                  <form onSubmit={handleFabTodoSubmit} className="space-y-3.5">
+                    <div>
+                      <label className="text-xs font-bold text-zinc-700 block mb-1">待辦任務名稱</label>
+                      <input
+                        type="text"
+                        value={fabTodoText}
+                        onChange={(e) => setFabTodoText(e.target.value)}
+                        placeholder="輸入要辦的事項..."
+                        autoFocus
+                        className="w-full bg-zinc-100 px-3.5 py-2.5 rounded-xl text-sm font-bold text-zinc-900 border border-zinc-200 focus:outline-none select-text"
+                      />
+                    </div>
 
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="col-span-2 bg-zinc-100 rounded-2xl px-3.5 py-2 border border-zinc-200">
-                    <label className="text-[10px] font-bold text-zinc-500 block">金額 ($)</label>
+                    <div>
+                      <label className="text-xs font-bold text-zinc-700 block mb-1">選擇艾森豪四象限</label>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {[
+                          { id: 'IE', label: '🔥 I&E 重要且緊急' },
+                          { id: 'INE', label: '🎯 I&NE 重要不緊急' },
+                          { id: 'NIE', label: '⚡ NI&E 不重要緊急' },
+                          { id: 'NINE', label: '📥 NI&NE 收件匣' }
+                        ].map((q) => (
+                          <button
+                            key={q.id}
+                            type="button"
+                            onClick={() => setFabTodoQuad(q.id)}
+                            className={`py-2 px-2 rounded-xl text-xs font-bold border transition cursor-pointer ${
+                              fabTodoQuad === q.id
+                                ? 'bg-zinc-900 text-white border-zinc-900 shadow-sm'
+                                : 'bg-zinc-50 text-zinc-700 border-zinc-200'
+                            }`}
+                          >
+                            {q.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className="text-[10px] font-bold text-zinc-500 block mb-1">任務分類</label>
+                        <select
+                          value={fabTodoCat}
+                          onChange={(e) => setFabTodoCat(e.target.value)}
+                          className="w-full bg-zinc-100 px-2 py-2 rounded-xl text-xs font-bold text-zinc-800 border border-zinc-200"
+                        >
+                          {(appState.todo.categories || []).map((c) => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-zinc-500 block mb-1">日期</label>
+                        <input
+                          type="date"
+                          value={fabTodoDate}
+                          onChange={(e) => setFabTodoDate(e.target.value)}
+                          className="w-full bg-zinc-100 px-2 py-1.5 rounded-xl text-xs font-mono text-zinc-800 border border-zinc-200"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-zinc-500 block mb-1">時間 (選填)</label>
+                        <input
+                          type="time"
+                          value={fabTodoTime}
+                          onChange={(e) => setFabTodoTime(e.target.value)}
+                          className="w-full bg-zinc-100 px-2 py-1.5 rounded-xl text-xs font-mono text-zinc-800 border border-zinc-200"
+                        />
+                      </div>
+                    </div>
+
                     <input
-                      type="number"
-                      value={fabTxAmount}
-                      onChange={(e) => setFabTxAmount(e.target.value)}
-                      placeholder="0.00"
-                      autoFocus
-                      className="w-full bg-transparent text-xl font-mono font-extrabold text-zinc-900 focus:outline-none"
+                      type="text"
+                      value={fabTodoNote}
+                      onChange={(e) => setFabTodoNote(e.target.value)}
+                      placeholder="任務備註 Note（選填）"
+                      className="w-full bg-zinc-100 px-3.5 py-2 rounded-xl text-xs text-zinc-800 border border-zinc-200 select-text"
                     />
-                  </div>
-                  <div className="bg-zinc-100 rounded-2xl px-3 py-2 border border-zinc-200 flex flex-col justify-center">
-                    <label className="text-[10px] font-bold text-zinc-500 block">日期</label>
-                    <input
-                      type="date"
-                      value={fabTxDate}
-                      onChange={(e) => setFabTxDate(e.target.value)}
-                      className="bg-transparent text-xs font-mono font-bold text-zinc-900 focus:outline-none"
-                    />
-                  </div>
-                </div>
 
-                <div>
-                  <label className="text-xs font-bold text-zinc-700 block mb-1.5">選擇分類 (連動 Pie Chart 統計)：</label>
-                  <div className="grid grid-cols-4 gap-1.5">
-                    {EXPENSE_CATEGORIES.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => setFabTxCategory(c.id)}
-                        className={`py-2 px-1 rounded-xl text-xs font-bold border transition cursor-pointer ${
-                          fabTxCategory === c.id
-                            ? 'bg-zinc-900 text-white border-zinc-900 shadow-sm'
-                            : 'bg-zinc-50 text-zinc-700 border-zinc-200'
-                        }`}
-                      >
-                        {c.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <input
-                  type="text"
-                  value={fabTxTitle}
-                  onChange={(e) => setFabTxTitle(e.target.value)}
-                  placeholder="備註說明（可留空，如：午餐、搭車）"
-                  className="w-full bg-zinc-100 px-3.5 py-2.5 rounded-xl text-xs text-zinc-900 border border-zinc-200 select-text"
-                />
-
-                <button
-                  type="submit"
-                  className="w-full py-3 rounded-2xl bg-zinc-900 text-white text-xs font-bold tracking-wider uppercase shadow-lg cursor-pointer"
-                >
-                  ✓ 確認記帳並更新圖表
-                </button>
-              </form>
+                    <button
+                      type="submit"
+                      className="w-full py-3 rounded-2xl bg-zinc-900 text-white text-xs font-bold tracking-wider uppercase shadow-lg cursor-pointer"
+                    >
+                      ✓ 確認加入四象限 To-Do
+                    </button>
+                  </form>
+                )}
+              </div>
             </div>
           )}
 
-          {/* MODAL 2: 記錄體態與睡眠 */}
+          {/* =========================================================
+              MODAL 2: 修訂 2 — 記錄與覆查修改歷史身體數據 Modal
+             ========================================================= */}
           {showHealthModal && (
             <div
               onClick={() => setShowHealthModal(false)}
               className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
             >
-              <form
+              <div
                 onClick={(e) => e.stopPropagation()}
-                onSubmit={handleSaveHealthRecord}
-                className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4"
+                className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto"
               >
                 <div className="flex items-center justify-between">
-                  <h3 className="text-base font-bold text-zinc-900">記錄 BODY 身體機能與睡眠時間</h3>
+                  <div>
+                    <h3 className="text-base font-bold text-zinc-900">
+                      {editingHealthRecordId ? `✎ 修改 ${healthDateInput} 身體機能數據` : '＋ 新增 / 覆查修改身體機能數據'}
+                    </h3>
+                    <p className="text-[11px] text-zinc-500">可輸入新紀錄，或點擊下方歷史列表覆查並修改過往數據</p>
+                  </div>
                   <button
                     type="button"
                     onClick={() => setShowHealthModal(false)}
-                    className="w-7 h-7 rounded-full bg-zinc-200 text-zinc-700 text-xs font-bold"
+                    className="w-7 h-7 rounded-full bg-zinc-200 text-zinc-700 text-xs font-bold cursor-pointer"
                   >
                     ✕
                   </button>
                 </div>
 
-                <div className="space-y-3">
-                  <div>
-                    <label className="text-xs font-bold text-zinc-700 block mb-1">📅 記錄日期</label>
-                    <input
-                      type="date"
-                      value={healthDateInput}
-                      onChange={(e) => setHealthDateInput(e.target.value)}
-                      className="w-full bg-zinc-100 px-3 py-2 rounded-xl text-xs font-mono font-bold text-zinc-900 border border-zinc-200"
-                    />
+                <form onSubmit={handleSaveHealthRecord} className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex-1">
+                      <label className="text-xs font-bold text-zinc-700 block mb-1">📅 記錄日期</label>
+                      <input
+                        type="date"
+                        value={healthDateInput}
+                        onChange={(e) => setHealthDateInput(e.target.value)}
+                        className="w-full bg-zinc-100 px-3 py-2 rounded-xl text-xs font-mono font-bold text-zinc-900 border border-zinc-200"
+                      />
+                    </div>
+                    {editingHealthRecordId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingHealthRecordId(null);
+                          setHealthDateInput(getTodayIso());
+                        }}
+                        className="mt-5 px-3 py-2 rounded-xl bg-zinc-200 text-zinc-700 text-xs font-bold cursor-pointer"
+                      >
+                        切換為新增今日
+                      </button>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-3 gap-2.5">
@@ -3482,24 +4100,73 @@ function doPost(e) {
                       </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="flex justify-end gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowHealthModal(false)}
-                    className="px-4 py-2 rounded-xl bg-zinc-200 text-xs font-semibold text-zinc-700"
-                  >
-                    取消
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-5 py-2 rounded-xl bg-zinc-900 text-white text-xs font-semibold cursor-pointer"
-                  >
-                    儲存並繪製折線圖
-                  </button>
+                  <div className="flex justify-end gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowHealthModal(false)}
+                      className="px-4 py-2 rounded-xl bg-zinc-200 text-xs font-semibold text-zinc-700 cursor-pointer"
+                    >
+                      關閉
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-5 py-2 rounded-xl bg-zinc-900 text-white text-xs font-semibold cursor-pointer"
+                    >
+                      {editingHealthRecordId ? '✓ 儲存修改並更新折線圖' : '✓ 儲存新增並繪製折線圖'}
+                    </button>
+                  </div>
+                </form>
+
+                {/* 歷史身體數據覆查與修改列表 */}
+                <div className="pt-3 border-t border-zinc-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-zinc-800">📋 歷史身體機能紀錄覆查 (點擊「修改」載入上方表單)</span>
+                    <span className="text-[10px] font-mono text-zinc-400">共 {(appState.health.metricsHistory || []).length} 筆</span>
+                  </div>
+                  <div className="space-y-1.5 max-h-[180px] overflow-y-auto pr-1">
+                    {[...(appState.health.metricsHistory || [])]
+                      .sort((a, b) => b.date.localeCompare(a.date))
+                      .map((rec) => {
+                        const isBeingEdited = editingHealthRecordId === rec.id;
+                        return (
+                          <div
+                            key={rec.id}
+                            className={`p-2.5 rounded-xl border text-xs flex items-center justify-between gap-2 ${
+                              isBeingEdited
+                                ? 'bg-blue-50 border-blue-400'
+                                : 'bg-zinc-50 border-zinc-200/80'
+                            }`}
+                          >
+                            <div className="font-mono">
+                              <span className="font-bold text-zinc-900 mr-2">{rec.date}</span>
+                              <span className="text-zinc-600">
+                                {rec.weightKg}kg ‧ 體脂 {rec.bodyFatPct}% ‧ 肌肉 {rec.muscleMassKg || 38.5}kg ‧ 睡眠 {rec.sleepHours}h
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleLoadHealthRecordForEdit(rec)}
+                                className="px-2 py-1 rounded-lg bg-zinc-900 text-white text-[10px] font-bold cursor-pointer"
+                              >
+                                ✎ 修改
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteHealthRecord(rec.id)}
+                                className="px-1.5 py-1 rounded-lg text-zinc-400 hover:text-rose-600 font-bold cursor-pointer"
+                                title="刪除此筆紀錄"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
                 </div>
-              </form>
+              </div>
             </div>
           )}
 
